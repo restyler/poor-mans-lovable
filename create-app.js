@@ -68,7 +68,7 @@ class CerebrasAppGenerator {
     console.log(`🤖 Generating ${appName}...`);
     const startTime = Date.now();
 
-    const enhancedPrompt = `${prompt}. Use this syntax for each file: <file path="filename.js">file content here</file>. Make it a complete working application with proper structure.`;
+    const enhancedPrompt = `${prompt}. Use this syntax for each file: <file path="filename.js">file content here</file>. Make it a complete working application with proper structure. If database storage is needed, use SQLite instead of external databases like Redis or MongoDB. IMPORTANT: For SQLite databases, always use the path './data/database.db' or './data/[appname].db' to ensure persistence in Docker containers.`;
 
     const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
       method: 'POST',
@@ -161,12 +161,24 @@ class CerebrasAppGenerator {
       try {
         await fs.access(dockerfilePath);
       } catch {
-        // Create basic Dockerfile
+        // Create basic Dockerfile with SQLite support
         const dockerfile = `FROM node:18-alpine
+
+# Install SQLite for database support
+RUN apk add --no-cache sqlite
+
 WORKDIR /app
+
+# Create data directory for persistent storage
+RUN mkdir -p /app/data
+
 COPY package.json ./
 RUN npm install
 COPY . .
+
+# Create volume for database persistence
+VOLUME ["/app/data"]
+
 EXPOSE 3000
 CMD ["npm", "start"]`;
         await fs.writeFile(dockerfilePath, dockerfile);
