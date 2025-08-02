@@ -2,6 +2,8 @@
 
 Generate complete applications using Cerebras AI with automatic Docker containerization and management.
 
+![Demo](img/demo.png)
+
 ## Setup
 
 1. Create `.env` file with your Cerebras API key:
