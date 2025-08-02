@@ -111,6 +111,95 @@ The tool uses modular prompts for different generation phases:
 - **Generation Prompts** (`prompts/generation.js`): Main application generation with Tailwind CSS v4 support
 - **Enhancement Prompts** (`prompts/enhancement.js`): LLM customization based on app type
 
+### Multi-Stage Generation Process
+
+The app generation follows a sophisticated multi-stage approach to ensure optimal results:
+
+#### **🔍 Stage 1: Analysis**
+```javascript
+const analysis = await this.analyzeAppStructure(prompt);
+// Determines: appType, framework, buildTool, styling, database, etc.
+```
+
+**Purpose**: Intelligent detection of app requirements using LLM analysis
+- **LLM-Powered**: Uses Cerebras AI to analyze the user's prompt
+- **Smart Classification**: Determines if app is frontend, backend, or fullstack
+- **Framework Detection**: Identifies React, Vue, Express, etc.
+- **Fallback System**: Keyword-based detection if LLM analysis fails
+
+#### **🎯 Stage 2: Enhancement**
+```javascript
+const enhancementPrompt = createEnhancementPrompt(prompt, analysis);
+// Customizes generation based on analysis results
+```
+
+**Purpose**: Context-aware customization based on analysis results
+- **App-Type Specific**: Different instructions for frontend, backend, fullstack
+- **Dynamic Content**: Includes missing files, dependencies, recommendations
+- **Contextual Adaptation**: Adapts prompt based on detected requirements
+
+**Enhancement Examples**:
+- **Frontend**: Focuses on UI components, styling, responsive design
+- **Backend**: Emphasizes API routes, database integration, authentication
+- **Fullstack**: Combines both frontend and backend requirements
+
+#### **⚙️ Stage 3: Generation**
+```javascript
+const generationPrompt = generationPrompt(enhancementPrompt);
+// Adds universal technical requirements and best practices
+```
+
+**Purpose**: Universal foundation with technical standards and best practices
+- **Universal Requirements**: Core dependencies, file structures, configurations
+- **Technical Standards**: Tailwind CSS v4 setup, SQLite usage, dependency management
+- **Best Practices**: Build tools, PostCSS configs, Docker considerations
+
+#### **🔧 Stage 4: Post-Generation Fixes**
+```javascript
+await this.applyPostGenerationFixes(appPath, analysis);
+// Ensures proper configuration and dependencies
+```
+
+**Purpose**: Automatic fixes and validation after generation
+- **Dependency Validation**: Ensures all required packages are included
+- **Configuration Fixes**: Creates missing config files (postcss.config.js, etc.)
+- **Syntax Updates**: Updates CSS files to use correct Tailwind v4 syntax
+
+### Prompt Architecture Benefits
+
+#### **🎯 Separation of Concerns**
+- **Analysis**: "What type of app do we need?" (Context)
+- **Enhancement**: "What specific features does this app type need?" (Customization)
+- **Generation**: "How do we build it properly?" (Standards)
+- **Fixes**: "What common issues need to be resolved?" (Validation)
+
+#### **🔄 Flexibility & Maintainability**
+- **Easy Updates**: Modify universal standards in generation prompt
+- **App-Type Logic**: Customize behavior in enhancement prompt
+- **Reusability**: Generation prompt works for any app type
+- **Extensibility**: Add new app types to enhancement prompt
+
+#### **📊 Example Workflow**
+```
+User Input: "Create a todo app with Tailwind CSS"
+
+Stage 1 (Analysis):
+  → Detects: frontend, react, vite, tailwind, no database
+
+Stage 2 (Enhancement):
+  → Adds: "Modern frontend with react and vite"
+  → Adds: "CRITICAL: Always create src/index.css with @import 'tailwindcss'"
+
+Stage 3 (Generation):
+  → Adds: "If using Tailwind CSS v4, include @tailwindcss/postcss"
+  → Adds: "Create postcss.config.js with proper configuration"
+
+Stage 4 (Fixes):
+  → Creates: postcss.config.js if missing
+  → Updates: CSS files to use @import syntax
+  → Validates: All dependencies are present
+```
+
 ### Tailwind CSS v4 Support
 
 All generated apps with Tailwind CSS now include:
@@ -149,6 +238,16 @@ All apps are tracked in `apps.json` with:
 - **Hybrid Generation**: Combines Vite scaffolding with LLM enhancement for better results
 - **Smart Fallbacks**: Keyword-based detection when LLM analysis fails
 - **App Type Detection**: Automatically identifies frontend, backend, or fullstack requirements
+
+### Hybrid Generation Strategy
+
+For frontend apps with Vite, the tool uses a sophisticated hybrid approach:
+
+1. **Vite Scaffolding**: Creates base project structure using `npm create vite@latest`
+2. **LLM Enhancement**: Customizes the scaffolded project with specific requirements
+3. **Fallback System**: Falls back to pure LLM generation if scaffolding fails
+
+This approach combines the reliability of Vite's scaffolding with the flexibility of LLM customization.
 
 ## Performance
 
