@@ -1,6 +1,6 @@
 # Cerebras App Generator
 
-Generate complete applications using Cerebras AI with automatic Docker containerization and management.
+A proof of concept demonstrating the power of [Cerebras AI](https://www.cerebras.ai/) for automated application generation. This tool uses the **Qwen3-480B Coder** model to generate complete applications with automatic Docker containerization and management.
 
 ![Demo](img/demo.png)
 
