@@ -949,6 +949,15 @@ export default {
       if (dockerResult.success) {
         console.log(`✅ App ${appName} created and running successfully!`);
         console.log(`🌐 Running at http://localhost:${port}`);
+        
+        // Check if README.md exists in the generated app
+        const readmePath = path.join(appPath, 'README.md');
+        try {
+          await fs.access(readmePath);
+          console.log(`📖 App documentation: ${readmePath}`);
+        } catch {
+          // README.md doesn't exist, that's okay
+        }
       } else {
         console.log(`⚠️  App ${appName} files created but Docker build failed!`);
         console.log(`❌ Docker error: ${dockerResult.error}`);

@@ -316,3 +316,13 @@ Each generation shows:
 - Handles container start/stop/remove operations
 - Supports different app types (frontend-only, backend-only, fullstack)
 - Automatic template selection based on app structure
+
+### ⚠️ Security Note
+
+This proof of concept uses plain Docker containers for simplicity. For real-world deployments, more robust sandboxing technologies should be considered:
+
+- **[Firecracker](https://firecracker-microvm.github.io/)** - AWS Lambda's microVM technology
+- **[gVisor](https://gvisor.dev/)** - Google's container runtime with enhanced security
+- **[Kata Containers](https://katacontainers.io/)** - Lightweight VMs for containers
+
+See [awesome-sandbox](https://github.com/restyler/awesome-sandbox) for a comprehensive list of sandboxing engines and security technologies.
