@@ -282,6 +282,27 @@ CMD ["npm", "start"]`;
       console.log(`${status} ${app.name}${port}`);
       console.log(`   📝 ${app.prompt}`);
       console.log(`   📁 ${app.path}`);
+      
+      // Get volume info if container is running
+      if (app.dockerStatus === 'running') {
+        try {
+          const inspectResult = execSync(`docker inspect "${app.name}" --format='{{json .Mounts}}'`, { encoding: 'utf8' });
+          const mounts = JSON.parse(inspectResult);
+          const volumes = mounts.filter(mount => mount.Type === 'volume');
+          
+          for (const volume of volumes) {
+            try {
+              // Get volume size
+              const sizeResult = execSync(`docker exec "${app.name}" du -sh /app/data 2>/dev/null || echo "N/A"`, { encoding: 'utf8' });
+              const size = sizeResult.trim().split('\t')[0] || 'N/A';
+              console.log(`   💾 Volume: ${volume.Name.substring(0, 12)}... (${size})`);
+            } catch {
+              console.log(`   💾 Volume: ${volume.Name.substring(0, 12)}... (N/A)`);
+            }
+          }
+        } catch {}
+      }
+      
       console.log(`   🕐 ${new Date(app.createdAt).toLocaleString()}`);
       console.log();
     }
@@ -320,9 +341,26 @@ CMD ["npm", "start"]`;
     const app = db.data.apps[appIndex];
 
     try {
+      // Get volume names before removing container
+      let volumeNames = [];
+      try {
+        const inspectResult = execSync(`docker inspect "${appName}" --format='{{json .Mounts}}'`, { encoding: 'utf8' });
+        const mounts = JSON.parse(inspectResult);
+        volumeNames = mounts.filter(mount => mount.Type === 'volume').map(mount => mount.Name);
+      } catch {}
+
       // Stop and remove container
       execSync(`docker stop "${appName}"`, { stdio: 'ignore' });
       execSync(`docker rm "${appName}"`, { stdio: 'ignore' });
+      
+      // Remove associated volumes
+      for (const volumeName of volumeNames) {
+        try {
+          execSync(`docker volume rm "${volumeName}"`, { stdio: 'ignore' });
+          console.log(`🗂️  Removed volume: ${volumeName}`);
+        } catch {}
+      }
+      
       execSync(`docker rmi "${appName}"`, { stdio: 'ignore' });
     } catch {}
 

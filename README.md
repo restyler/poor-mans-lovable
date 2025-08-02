@@ -26,6 +26,12 @@ node create-app.js "Build a todo list REST API with Express.js"
 node create-app.js --list
 ```
 
+Shows all generated apps with:
+- Running status and port
+- App description and local path
+- Volume information (ID and storage size) for running apps
+- Creation timestamp
+
 ### Stop an App
 ```bash
 node create-app.js --stop simple-todo-rest
@@ -35,6 +41,12 @@ node create-app.js --stop simple-todo-rest
 ```bash
 node create-app.js --remove simple-todo-rest
 ```
+
+Completely removes:
+- Docker container and image
+- Associated Docker volumes and data
+- Local files and directories
+- App tracking from database
 
 ## Features
 
