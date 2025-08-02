@@ -8,6 +8,7 @@ import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
+import { analysisPrompt, generationPrompt, createEnhancementPrompt } from './prompts/index.js';
 
 dotenv.config();
 
@@ -68,35 +69,7 @@ class CerebrasAppGenerator {
   async analyzeAppStructure(prompt) {
     console.log(`🔍 Analyzing app structure for: "${prompt}"`);
     
-    const analysisPrompt = `Analyze this app request and determine the optimal structure:
-
-REQUEST: "${prompt}"
-
-Please respond with ONLY a JSON object containing:
-{
-  "appType": "frontend|backend|fullstack",
-  "framework": "react|vue|svelte|express|fastify|koa|vanilla",
-  "buildTool": "vite|webpack|parcel|none",
-  "styling": "tailwind|css|sass|styled-components|none",
-  "database": "sqlite|postgres|mongodb|none",
-  "authentication": "true|false",
-  "serverFile": "server.js|app.js|index.js|none",
-  "staticBuild": "true|false",
-  "missingFiles": ["index.html", "package.json", "src/main.jsx", "src/App.jsx", "src/index.css"],
-  "missingDependencies": ["react", "react-dom", "express", "sqlite3"],
-  "recommendations": ["Use Vite for fast builds", "Add authentication", "Use SQLite for simplicity"]
-}
-
-CRITICAL RULES:
-- If the prompt mentions both UI/frontend AND API/database, classify as "fullstack"
-- If using Vite + Express + Database, set staticBuild to "true"
-- If using Vite + Express, always include "express" in missingDependencies
-- If using React, always include "react" and "react-dom" in missingDependencies
-- If using database, always include appropriate database driver in missingDependencies
-- For full-stack apps, ensure both frontend build and backend server are configured
-- For full-stack apps, set serverFile to "server.js" and staticBuild to "true"
-
-Be specific and practical. Consider the user's exact requirements. For Vite React apps, always include "react" and "react-dom" in missingDependencies.`;
+    const promptContent = analysisPrompt(prompt);
     
     try {
       const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
@@ -111,7 +84,7 @@ Be specific and practical. Consider the user's exact requirements. For Vite Reac
           max_tokens: 1000,
           temperature: 0.3,
           top_p: 0.8,
-          messages: [{ role: "user", content: analysisPrompt }]
+          messages: [{ role: "user", content: promptContent }]
         })
       });
 
@@ -465,73 +438,7 @@ button:focus-visible {
   async enhanceWithLLM(prompt, appName, appPath, analysis) {
     console.log(`🤖 Enhancing ${appName} with LLM customization...`);
     
-    let enhancementPrompt = `${prompt}. 
-
-ANALYSIS RESULTS:
-- App Type: ${analysis.appType}
-- Framework: ${analysis.framework}
-- Build Tool: ${analysis.buildTool}
-- Styling: ${analysis.styling}
-- Database: ${analysis.database}
-- Authentication: ${analysis.authentication}
-
-REQUIREMENTS:`;
-
-    if (analysis.appType === 'frontend') {
-      enhancementPrompt += `
-- Modern frontend with ${analysis.framework} and ${analysis.buildTool}
-- ${analysis.styling} styling
-- Interactive features and responsive design
-- IMPORTANT: In main.jsx, import the CSS file: import './index.css'
-- CRITICAL: Always create src/index.css with @import "tailwindcss";
-- CRITICAL: For Tailwind CSS v4, create postcss.config.js with proper PostCSS plugin
-- CRITICAL: Always create index.html in the root directory for Vite apps`;
-    } else if (analysis.appType === 'backend') {
-      enhancementPrompt += `
-- ${analysis.framework} server setup
-- API routes and controllers
-- ${analysis.database} database integration
-- ${analysis.authentication === 'true' ? 'Authentication and security' : 'Basic API endpoints'}
-- Proper error handling`;
-    } else if (analysis.appType === 'fullstack') {
-      enhancementPrompt += `
-- CRITICAL: Create a full-stack application with both frontend and backend
-- Frontend: ${analysis.framework} + ${analysis.buildTool} + ${analysis.styling}
-- Backend: Express.js server with API routes
-- Database: ${analysis.database} integration
-- IMPORTANT: Create server.js that serves both API and built frontend
-- CRITICAL: API routes must come BEFORE the catch-all route that serves index.html
-- CRITICAL: Include express in dependencies and fs import in server.js
-- CRITICAL: For full-stack apps, build frontend and serve via Express
-- CRITICAL: Always create index.html in the root directory for Vite apps with proper HTML content
-- CRITICAL: Always create src/main.jsx and src/App.jsx for React apps
-- CRITICAL: Always create src/index.css with @import "tailwindcss"; for Tailwind v4
-- CRITICAL: For Tailwind CSS v4, create postcss.config.js with proper PostCSS plugin
-- CRITICAL: index.html must contain proper HTML structure with <!DOCTYPE html>, <html>, <head>, <body>, and <div id="root"></div>
-- ${analysis.authentication === 'true' ? 'Authentication system' : 'Basic functionality'}`;
-    }
-
-    if (analysis.missingFiles.length > 0) {
-      enhancementPrompt += `\n\nCRITICAL: Ensure these files are created: ${analysis.missingFiles.join(', ')}`;
-    } else {
-      // Always ensure index.html exists for Vite apps
-      if (analysis.buildTool === 'vite') {
-        enhancementPrompt += `\n\nCRITICAL: Always create index.html in the root directory for Vite apps`;
-      }
-    }
-
-    if (analysis.missingDependencies && analysis.missingDependencies.length > 0) {
-      enhancementPrompt += `\n\nCRITICAL: Ensure these dependencies are included in package.json: ${analysis.missingDependencies.join(', ')}`;
-    }
-
-    if (analysis.recommendations.length > 0) {
-      enhancementPrompt += `\n\nRECOMMENDATIONS: ${analysis.recommendations.join(', ')}`;
-    }
-
-    enhancementPrompt += `
-
-IMPORTANT: All JSON files (like package.json) must be valid JSON - no template literals, JavaScript expressions, or markdown code blocks. Just write the raw JSON content.
-Use this syntax for each file: <file path="filename.js">file content here</file>.`;
+    const enhancementPrompt = createEnhancementPrompt(prompt, analysis);
     
     return await this.chatWithCerebras(enhancementPrompt, appName, appPath);
   }
@@ -540,56 +447,7 @@ Use this syntax for each file: <file path="filename.js">file content here</file>
     console.log(`🤖 Generating ${appName}...`);
     const startTime = Date.now();
 
-    const enhancedPrompt = `${prompt}. Use this syntax for each file: <file path="filename.js">file content here</file>. Make it a complete working application with proper structure. 
-
-CRITICAL REQUIREMENTS:
-- If using Tailwind CSS v4, include "tailwindcss": "^4.1.11" AND "@tailwindcss/postcss": "^4.1.11" in devDependencies
-- CRITICAL: For Tailwind CSS v4, create postcss.config.js with: import tailwindcss from "@tailwindcss/postcss"; export default { plugins: [tailwindcss] }
-- CRITICAL: For Tailwind CSS v4, use @import "tailwindcss"; in CSS files instead of old @tailwind directives
-- If using any build tools (webpack, vite, etc.), include them in devDependencies
-- If using any CSS preprocessors (Sass, Less), include them in devDependencies
-- If using EJS templates, include "ejs": "^3.1.10" in dependencies
-- If using any template engines (Handlebars, Pug, etc.), include them in dependencies
-- If using bcrypt for password hashing, include "bcrypt": "^6.0.0" in dependencies
-- If using sessions, include "express-session": "^1.18.2" in dependencies
-- If using SQLite database, include "sqlite3": "^5.1.7" in dependencies
-- If using body parsing, include "body-parser": "^2.2.0" in dependencies
-- If using Express.js, ALWAYS include "express": "^4.18.2" in dependencies
-- If using React, ALWAYS include "react": "^18.2.0" and "react-dom": "^18.2.0" in dependencies
-- Always include ALL required dependencies in package.json
-- For SQLite databases, use path './data/database.db' or './data/[appname].db'
-- Ensure all npm scripts reference installed packages only
-- Double-check that every require() or import statement has a corresponding dependency in package.json
-- IMPORTANT: Review your code and ensure EVERY module you import or require is listed in package.json
-
-FULL-STACK APP REQUIREMENTS:
-- For full-stack apps with Vite + Express:
-  * Include "express": "^4.18.2" in dependencies
-  * Include "fs" import in server.js: import fs from 'fs'
-  * Create server.js that serves both API routes AND built frontend
-  * API routes MUST come BEFORE the catch-all route that serves index.html
-  * Use express.static('dist') to serve built frontend
-  * Use res.sendFile(path.join(__dirname, 'dist/index.html')) for catch-all route
-  * Ensure proper error handling and database initialization
-  * CRITICAL: Always create index.html in the root directory for Vite apps with proper HTML content
-  * CRITICAL: Always create src/main.jsx and src/App.jsx for React apps
-  * CRITICAL: Always create src/index.css for styling
-  * CRITICAL: index.html must contain: <!DOCTYPE html>, <html>, <head>, <body>, <div id="root"></div>, and <script type="module" src="/src/main.jsx"></script>
-
-FRONTEND STACK RECOMMENDATIONS:
-- For modern frontend apps, prefer Vite + Tailwind CSS v4 stack:
-  * Install: "vite": "^5.0.0", "tailwindcss": "^4.1.11", and "@tailwindcss/postcss": "^4.1.11" in devDependencies
-  * Install: "@vitejs/plugin-react": "^4.2.1" in devDependencies
-  * Create vite.config.js with: import react from '@vitejs/plugin-react'; export default { plugins: [react()] }
-  * CRITICAL: Create postcss.config.js with: import tailwindcss from "@tailwindcss/postcss"; export default { plugins: [tailwindcss] }
-  * Use @import "tailwindcss"; in CSS instead of old @tailwind directives
-  * Add build script: "build": "vite build" and dev script: "dev": "vite"
-- For simple Express apps with Tailwind v4, use the PostCSS approach:
-  * Install: "tailwindcss": "^4.1.11" and "@tailwindcss/postcss": "^4.1.11" in devDependencies
-  * Create postcss.config.js with: import tailwindcss from "@tailwindcss/postcss"; export default { plugins: [tailwindcss] }
-  * Use @import "tailwindcss"; in CSS files
-
-If database storage is needed, use SQLite instead of external databases like Redis or MongoDB.`;
+    const enhancedPrompt = generationPrompt(prompt);
 
     const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
       method: 'POST',
