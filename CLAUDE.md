@@ -17,3 +17,7 @@ curl --location 'https://api.cerebras.ai/v1/chat/completions' \
     }
   ]
 }'
+
+
+
+Do not add claude mentions into commit messages metadata    
