@@ -1,0 +1,19 @@
+FROM node:18-alpine
+
+# Install SQLite for database support
+RUN apk add --no-cache sqlite
+
+WORKDIR /app
+
+# Create data directory for persistent storage
+RUN mkdir -p /app/data
+
+COPY package.json ./
+RUN npm install
+COPY . .
+
+# Create volume for database persistence
+VOLUME ["/app/data"]
+
+EXPOSE 3000
+CMD ["npm", "start"] 

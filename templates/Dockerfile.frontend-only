@@ -1,0 +1,16 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package.json ./
+RUN npm install
+COPY . .
+
+# Build the app (with esbuild fix)
+RUN npm install esbuild@latest && npm run build
+
+# Install serve to run the built app
+RUN npm install -g serve
+
+EXPOSE 3000
+CMD ["serve", "-s", "dist", "-l", "3000"] 
