@@ -56,6 +56,8 @@ Completely removes:
 - 📊 **Performance Tracking**: Displays API latency and token usage
 - 🗂️ **App Management**: JSON-based storage to track all generated apps
 - 🔒 **Safe Generation**: Generated files are isolated in tmp/ to protect your project
+- 🎨 **Tailwind CSS v4 Support**: Proper PostCSS configuration and modern styling
+- 🧠 **Intelligent Analysis**: LLM-powered app structure detection and optimization
 
 ## Generated App Structure
 
@@ -84,6 +86,12 @@ node create-app.js "Build a Node.js web scraper for news articles"
 
 # Generate a real-time chat app
 node create-app.js "Create a Socket.io chat application with rooms"
+
+# Generate a modern frontend app with Tailwind CSS
+node create-app.js "Create a todo app with Tailwind CSS styling"
+
+# Generate a full-stack application
+node create-app.js "Build a full-stack blog with React frontend and Express backend"
 ```
 
 ## API Response Format
@@ -95,6 +103,22 @@ The tool expects Cerebras to return files in this format:
 </file>
 ```
 
+## Prompt Management
+
+The tool uses modular prompts for different generation phases:
+
+- **Analysis Prompts** (`prompts/analysis.js`): App structure detection and requirements analysis
+- **Generation Prompts** (`prompts/generation.js`): Main application generation with Tailwind CSS v4 support
+- **Enhancement Prompts** (`prompts/enhancement.js`): LLM customization based on app type
+
+### Tailwind CSS v4 Support
+
+All generated apps with Tailwind CSS now include:
+- Proper `@tailwindcss/postcss` dependency
+- Automatic `postcss.config.js` creation
+- Correct `@import "tailwindcss"` syntax in CSS files
+- Post-generation fixes to ensure proper configuration
+
 ## Management
 
 All apps are tracked in `apps.json` with:
@@ -104,6 +128,27 @@ All apps are tracked in `apps.json` with:
 - Port assignments (starting from 3100)
 - Creation timestamp
 - Performance metrics (latency, tokens)
+
+## Recent Improvements
+
+### Tailwind CSS v4 Configuration Fix
+
+**Problem**: Generated apps with Tailwind CSS v4 were missing proper PostCSS configuration, resulting in unstyled interfaces.
+
+**Solution**: 
+- Added `@tailwindcss/postcss` dependency requirement
+- Automatic `postcss.config.js` creation with proper configuration
+- Updated CSS files to use `@import "tailwindcss"` syntax
+- Post-generation fixes to ensure proper setup
+
+**Result**: All future apps with Tailwind CSS v4 now display properly styled interfaces.
+
+### Intelligent App Analysis
+
+- **LLM-Powered Detection**: Uses Cerebras AI to analyze app requirements and determine optimal structure
+- **Hybrid Generation**: Combines Vite scaffolding with LLM enhancement for better results
+- **Smart Fallbacks**: Keyword-based detection when LLM analysis fails
+- **App Type Detection**: Automatically identifies frontend, backend, or fullstack requirements
 
 ## Performance
 
@@ -168,3 +213,5 @@ Each generation shows:
 - Names containers by app name for easy management
 - Creates persistent volumes for database storage
 - Handles container start/stop/remove operations
+- Supports different app types (frontend-only, backend-only, fullstack)
+- Automatic template selection based on app structure
