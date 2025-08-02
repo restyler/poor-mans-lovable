@@ -4,6 +4,33 @@ A proof of concept demonstrating the power of [Cerebras AI](https://www.cerebras
 
 ![Demo](img/demo.png)
 
+## Installation
+
+### Prerequisites
+
+- **Node.js** (v16 or higher)
+- **Docker** - Required for containerization and app deployment
+- **Git** - For version control
+
+### Quick Start
+
+1. **Clone the repository:**
+```bash
+git clone https://github.com/restyler/poor-mans-lovable.git
+cd poor-mans-lovable
+```
+
+2. **Install dependencies:**
+```bash
+npm install
+```
+
+3. **Set up environment:**
+```bash
+cp .env.example .env  # if .env.example exists
+# Edit .env and add your CEREBRAS_API_KEY
+```
+
 ## Setup
 
 1. Create `.env` file with your Cerebras API key:
@@ -11,10 +38,7 @@ A proof of concept demonstrating the power of [Cerebras AI](https://www.cerebras
 CEREBRAS_API_KEY=your_api_key_here
 ```
 
-2. Install dependencies:
-```bash
-npm install
-```
+> **Note**: Get your API key from [Cerebras AI](https://www.cerebras.ai/)
 
 ## Usage
 
