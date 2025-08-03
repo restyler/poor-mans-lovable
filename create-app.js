@@ -885,138 +885,450 @@ export default {
     }
   }
 
-  async buildAndRunDocker(appName, appPath, port) {
-    try {
-      // Security: Sanitize app name for Docker commands
-      appName = this.sanitizeName(appName);
-      
-      console.log(`🐳 Building Docker image for ${appName}...`);
-      const buildStartTime = Date.now();
-      
-      // Create or regenerate Dockerfile
-      const dockerfilePath = path.join(appPath, 'Dockerfile');
-      
-      // Enhanced app type detection
-      const packageJsonPath = path.join(appPath, 'package.json');
-      let appType = 'backend-only';
+  async buildAndRunDocker(appName, appPath, port, maxRetries = 3) {
+    let attempt = 0;
+    let lastError = null;
+    let dockerLogs = '';
+    
+    while (attempt < maxRetries) {
+      attempt++;
+      console.log(`🐳 Docker build attempt ${attempt}/${maxRetries} for ${appName}...`);
       
       try {
-        const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
-        const hasVite = packageJson.devDependencies?.vite || packageJson.dependencies?.vite;
-        const hasExpress = packageJson.dependencies?.express;
-        const hasServerFile = await fs.access(path.join(appPath, 'server.js')).then(() => true).catch(() => false);
+        // Security: Sanitize app name for Docker commands
+        appName = this.sanitizeName(appName);
         
-        if (hasVite && hasExpress && hasServerFile) {
-          appType = 'fullstack';
-          console.log(`🔍 Detected full-stack app: Vite frontend + Express backend`);
-        } else if (hasVite) {
-          appType = 'frontend-only';
-          console.log(`🔍 Detected frontend-only app: Vite build`);
-        } else if (hasExpress || hasServerFile) {
-          appType = 'backend-only';
-          console.log(`🔍 Detected backend-only app: Express server`);
+        const buildStartTime = Date.now();
+        
+        // Create or regenerate Dockerfile
+        const dockerfilePath = path.join(appPath, 'Dockerfile');
+        
+        // Enhanced app type detection
+        const packageJsonPath = path.join(appPath, 'package.json');
+        let appType = 'backend-only';
+        
+        try {
+          const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
+          const hasVite = packageJson.devDependencies?.vite || packageJson.dependencies?.vite;
+          const hasExpress = packageJson.dependencies?.express;
+          const hasServerFile = await fs.access(path.join(appPath, 'server.js')).then(() => true).catch(() => false);
+          
+          if (hasVite && hasExpress && hasServerFile) {
+            appType = 'fullstack';
+            console.log(`🔍 Detected full-stack app: Vite frontend + Express backend`);
+          } else if (hasVite) {
+            appType = 'frontend-only';
+            console.log(`🔍 Detected frontend-only app: Vite build`);
+          } else if (hasExpress || hasServerFile) {
+            appType = 'backend-only';
+            console.log(`🔍 Detected backend-only app: Express server`);
+          }
+        } catch (error) {
+          console.log(`⚠️  Could not analyze package.json, using backend-only template: ${error.message}`);
         }
+        
+        // Smart build strategy: Use optimized Dockerfiles
+        const currentDir = path.dirname(fileURLToPath(import.meta.url));
+        const useOptimized = process.env.DOCKER_OPTIMIZED !== 'false'; // Default to optimized
+        
+        let templatePath;
+        if (useOptimized) {
+          console.log(`⚡ Using optimized Docker build strategy`);
+          switch (appType) {
+            case 'fullstack':
+              templatePath = path.join(currentDir, 'templates/Dockerfile.fullstack.optimized');
+              break;
+            case 'frontend-only':
+              templatePath = path.join(currentDir, 'templates/Dockerfile.frontend-only.optimized');
+              break;
+            case 'backend-only':
+            default:
+              templatePath = path.join(currentDir, 'templates/Dockerfile.backend-only.optimized');
+              break;
+          }
+        } else {
+          console.log(`🐌 Using legacy Docker build strategy`);
+          switch (appType) {
+            case 'fullstack':
+              templatePath = path.join(currentDir, 'templates/Dockerfile.fullstack');
+              break;
+            case 'frontend-only':
+              templatePath = path.join(currentDir, 'templates/Dockerfile.frontend-only');
+              break;
+            case 'backend-only':
+            default:
+              templatePath = path.join(currentDir, 'templates/Dockerfile.backend-only');
+              break;
+          }
+        }
+        
+        // Detect app folders for dynamic Dockerfile generation
+        const appFolders = await this.detectAppFolders(appPath);
+        
+        // Read template and render with nunjucks
+        const templateContent = await fs.readFile(templatePath, 'utf8');
+        const dockerfile = nunjucks.renderString(templateContent, {
+          appFolders: appFolders
+        });
+        
+        // Write rendered Dockerfile to app directory
+        await fs.writeFile(dockerfilePath, dockerfile);
+
+        // Security: Use absolute paths and validate port number
+        if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+          throw new Error(`Invalid port number: ${port}`);
+        }
+
+        // Advanced Docker build with BuildKit and caching
+        const buildCommand = this.createOptimizedBuildCommand(appName, appPath, useOptimized);
+        console.log(`🔨 Build command: ${buildCommand}`);
+        
+        const dockerBuildStart = Date.now();
+        execSync(buildCommand, { stdio: 'inherit' });
+        const dockerBuildTime = Date.now() - dockerBuildStart;
+        
+        console.log(`⚡ Docker build completed in ${dockerBuildTime}ms`);
+        
+        // Stop existing container if it exists
+        try {
+          execSync(`docker stop "${appName}"`, { stdio: 'ignore' });
+          execSync(`docker rm "${appName}"`, { stdio: 'ignore' });
+        } catch {}
+
+        // Check if container name is already in use
+        let containerName = appName;
+        try {
+          const containerExists = execSync(`docker ps -a --filter "name=${appName}" --format "{{.Names}}"`, { encoding: 'utf8' }).trim();
+          if (containerExists) {
+            console.log(`⚠️  Container name ${appName} already exists, using unique name`);
+            containerName = `${appName}-${Date.now()}`;
+          }
+        } catch {}
+
+        // Run new container (use original appName for image, containerName for container)
+        console.log(`🚀 Starting container on port ${port}...`);
+        execSync(`docker run -d --name "${containerName}" -p ${port}:3000 "${appName}"`, { stdio: 'inherit' });
+        
+        // Wait a moment and check if container is running
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        // Check container status
+        try {
+          const containerStatus = execSync(`docker ps --filter "name=${containerName}" --format "{{.Status}}"`, { encoding: 'utf8' }).trim();
+          if (!containerStatus) {
+            throw new Error('Container failed to start');
+          }
+        } catch (error) {
+          // Get container logs for debugging
+          try {
+            dockerLogs = execSync(`docker logs "${containerName}"`, { encoding: 'utf8' });
+            console.log(`📋 Container logs: ${dockerLogs}`);
+          } catch {}
+          throw new Error(`Container failed to start: ${error.message}`);
+        }
+        
+        const totalBuildTime = Date.now() - buildStartTime;
+        console.log(`📊 Total build time: ${totalBuildTime}ms (Docker: ${dockerBuildTime}ms)`);
+        
+        return { 
+          success: true, 
+          port, 
+          appType,
+          buildMetrics: {
+            totalBuildTime,
+            dockerBuildTime,
+            optimized: useOptimized
+          }
+        };
       } catch (error) {
-        console.log(`⚠️  Could not analyze package.json, using backend-only template: ${error.message}`);
-      }
-      
-      // Smart build strategy: Use optimized Dockerfiles
-      const currentDir = path.dirname(fileURLToPath(import.meta.url));
-      const useOptimized = process.env.DOCKER_OPTIMIZED !== 'false'; // Default to optimized
-      
-      let templatePath;
-      if (useOptimized) {
-        console.log(`⚡ Using optimized Docker build strategy`);
-        switch (appType) {
-          case 'fullstack':
-            templatePath = path.join(currentDir, 'templates/Dockerfile.fullstack.optimized');
-            break;
-          case 'frontend-only':
-            templatePath = path.join(currentDir, 'templates/Dockerfile.frontend-only.optimized');
-            break;
-          case 'backend-only':
-          default:
-            templatePath = path.join(currentDir, 'templates/Dockerfile.backend-only.optimized');
-            break;
+        lastError = error;
+        console.error(`❌ Docker error (attempt ${attempt}/${maxRetries}): ${error.message}`);
+        
+        // Extract Docker logs for error analysis
+        try {
+          if (attempt < maxRetries) {
+            console.log(`🔍 Analyzing Docker error for automatic fix...`);
+            
+            // Get Docker build logs
+            try {
+              const buildLogs = execSync(`docker build --no-cache -t "${appName}-debug" "${appPath}" 2>&1`, { encoding: 'utf8' });
+              dockerLogs = buildLogs;
+            } catch (buildError) {
+              dockerLogs = buildError.stdout || buildError.stderr || error.message;
+            }
+            
+            // Get container logs if container was created
+            try {
+              const containerLogs = execSync(`docker logs "${appName}-${Date.now()}" 2>&1`, { encoding: 'utf8' });
+              dockerLogs += '\n\nContainer logs:\n' + containerLogs;
+            } catch {}
+            
+            // Analyze error and generate fix
+            const fixResult = await this.analyzeDockerErrorAndFix(appName, appPath, dockerLogs, error.message);
+            
+            if (fixResult.success) {
+              console.log(`🔧 Applied automatic fix: ${fixResult.fixDescription}`);
+              console.log(`🔄 Retrying build with fixes...`);
+              continue; // Retry with fixes
+            } else {
+              console.log(`⚠️  Could not automatically fix Docker error: ${fixResult.error}`);
+            }
+          }
+        } catch (analysisError) {
+          console.log(`⚠️  Error analysis failed: ${analysisError.message}`);
         }
-      } else {
-        console.log(`🐌 Using legacy Docker build strategy`);
-        switch (appType) {
-          case 'fullstack':
-            templatePath = path.join(currentDir, 'templates/Dockerfile.fullstack');
-            break;
-          case 'frontend-only':
-            templatePath = path.join(currentDir, 'templates/Dockerfile.frontend-only');
-            break;
-          case 'backend-only':
-          default:
-            templatePath = path.join(currentDir, 'templates/Dockerfile.backend-only');
-            break;
-        }
+        
+        // Clean up failed containers
+        try {
+          execSync(`docker stop "${appName}"`, { stdio: 'ignore' });
+          execSync(`docker rm "${appName}"`, { stdio: 'ignore' });
+        } catch {}
       }
+    }
+    
+    // All retries failed
+    console.error(`❌ Docker build failed after ${maxRetries} attempts`);
+    return { 
+      success: false, 
+      error: lastError?.message || 'Unknown Docker error',
+      dockerLogs,
+      attempts: maxRetries
+    };
+  }
+
+  // Security: Validate file paths to prevent directory traversal
+  validateFilePath(filePath, appPath) {
+    const normalizedFilePath = path.normalize(filePath);
+    const normalizedAppPath = path.normalize(appPath);
+    
+    // Prevent directory traversal
+    if (normalizedFilePath.includes('..') || normalizedFilePath.startsWith('/')) {
+      throw new Error(`Invalid file path: ${filePath}`);
+    }
+    
+    const fullPath = path.join(normalizedAppPath, normalizedFilePath);
+    const resolvedPath = path.resolve(fullPath);
+    const resolvedAppPath = path.resolve(normalizedAppPath);
+    
+    // Ensure the resolved path is within the app directory
+    if (!resolvedPath.startsWith(resolvedAppPath + path.sep) && resolvedPath !== resolvedAppPath) {
+      throw new Error(`File path outside app directory: ${filePath}`);
+    }
+    
+    return resolvedPath;
+  }
+
+  // Security: File allowlist for LLM modifications
+  isAllowedFile(filePath) {
+    const allowedPatterns = [
+      /^package\.json$/,
+      /^src\/.*\.(js|ts|jsx|tsx|css|html|json)$/,
+      /^public\/.*\.(js|css|html|json|png|jpg|svg|ico)$/,
+      /^components\/.*\.(js|ts|jsx|tsx|css)$/,
+      /^pages\/.*\.(js|ts|jsx|tsx|css)$/,
+      /^styles\/.*\.(css|scss|less)$/,
+      /^.*\.env\.example$/,
+      /^README\.md$/,
+      /^index\.(js|ts|html)$/,
+      /^server\.(js|ts)$/,
+      /^app\.(js|ts|jsx|tsx)$/,
+      /^main\.(js|ts|jsx|tsx)$/
+    ];
+    
+    return allowedPatterns.some(pattern => pattern.test(filePath));
+  }
+
+  // Security: Sanitize LLM response content
+  sanitizeLLMContent(content) {
+    if (typeof content !== 'string') {
+      throw new Error('Content must be a string');
+    }
+    
+    // Check for dangerous patterns
+    const dangerousPatterns = [
+      /require\s*\(\s*['"]child_process['"]/,
+      /import.*child_process/,
+      /exec\s*\(/,
+      /spawn\s*\(/,
+      /process\.env\./,
+      /fs\.writeFile.*\/\.\./,
+      /\.\.\/\.\./,
+      /\/etc\/passwd/,
+      /\/root\//,
+      /sudo/,
+      /rm -rf/,
+      /curl.*http/,
+      /wget/,
+      /eval\s*\(/,
+      /new Function\s*\(/
+    ];
+    
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(content)) {
+        throw new Error(`Dangerous pattern detected in LLM response: ${pattern.source}`);
+      }
+    }
+    
+    // Limit content size
+    if (content.length > 50000) {
+      throw new Error('Content too large');
+    }
+    
+    return content;
+  }
+
+  // Security: Sanitize logs to prevent sensitive data leakage
+  sanitizeLogs(logs) {
+    if (typeof logs !== 'string') {
+      return String(logs || '');
+    }
+    
+    // Remove potential API keys and sensitive information
+    return logs
+      .replace(/Bearer\s+[A-Za-z0-9\-_]+/g, 'Bearer [REDACTED]')
+      .replace(/Authorization:\s*Bearer\s+[A-Za-z0-9\-_]+/gi, 'Authorization: Bearer [REDACTED]')
+      .replace(/api[_-]?key['":\s]*[A-Za-z0-9\-_]+/gi, 'api_key: [REDACTED]')
+      .replace(/CEREBRAS_API_KEY['":\s]*[A-Za-z0-9\-_]+/gi, 'CEREBRAS_API_KEY: [REDACTED]')
+      .replace(/token['":\s]*[A-Za-z0-9\-_]{20,}/gi, 'token: [REDACTED]')
+      .replace(/password['":\s]*[^\s'"]+/gi, 'password: [REDACTED]')
+      .replace(/secret['":\s]*[^\s'"]+/gi, 'secret: [REDACTED]')
+      .replace(/\/[a-z0-9]{32,}/g, '/[HASH_REDACTED]'); // Redact long hash-like strings in paths
+  }
+
+  async analyzeDockerErrorAndFix(appName, appPath, dockerLogs, errorMessage) {
+    try {
+      console.log(`🤖 Using LLM to analyze Docker error and generate fixes...`);
       
-      // Detect app folders for dynamic Dockerfile generation
-      const appFolders = await this.detectAppFolders(appPath);
+      // Security: Sanitize logs to prevent API key leakage
+      const sanitizedDockerLogs = this.sanitizeLogs(dockerLogs);
+      const sanitizedErrorMessage = this.sanitizeLogs(errorMessage);
       
-      // Read template and render with nunjucks
-      const templateContent = await fs.readFile(templatePath, 'utf8');
-      const dockerfile = nunjucks.renderString(templateContent, {
-        appFolders: appFolders
+      // Create a comprehensive error analysis prompt
+      const errorAnalysisPrompt = `You are a Docker and Node.js expert. Analyze the following Docker build/run error and provide specific fixes.
+
+ERROR MESSAGE: ${sanitizedErrorMessage}
+
+DOCKER LOGS:
+${sanitizedDockerLogs}
+
+APP CONTEXT:
+- App name: ${appName}
+- App path: ${appPath}
+
+TASK:
+1. Analyze the error and identify the root cause
+2. Provide specific file changes needed to fix the issue
+3. Focus on common issues like:
+   - Missing dependencies in package.json
+   - Incorrect import statements
+   - Missing files or directories
+   - Port conflicts
+   - File permission issues
+   - Build tool configuration problems
+
+RESPONSE FORMAT:
+Return a JSON object with this structure:
+{
+  "success": true/false,
+  "fixDescription": "Brief description of the fix",
+  "changes": [
+    {
+      "file": "path/to/file",
+      "action": "create|modify|delete",
+      "content": "file content or null for delete"
+    }
+  ],
+  "error": "error message if no fix possible"
+}
+
+IMPORTANT:
+- Only suggest changes that are safe and necessary
+- If the error cannot be automatically fixed, set success to false
+- Provide specific, actionable fixes
+- Focus on the most common Docker/Node.js issues`;
+
+      const response = await fetch('https://api.cerebras.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify({
+          model: "qwen-3-coder-480b",
+          stream: false,
+          max_tokens: 2000,
+          temperature: 0.1,
+          top_p: 0.9,
+          messages: [{ role: "user", content: errorAnalysisPrompt }]
+        })
       });
-      
-      // Write rendered Dockerfile to app directory
-      await fs.writeFile(dockerfilePath, dockerfile);
 
-      // Security: Use absolute paths and validate port number
-      if (!Number.isInteger(port) || port < 1024 || port > 65535) {
-        throw new Error(`Invalid port number: ${port}`);
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status}`);
       }
 
-      // Advanced Docker build with BuildKit and caching
-      const buildCommand = this.createOptimizedBuildCommand(appName, appPath, useOptimized);
-      console.log(`🔨 Build command: ${buildCommand}`);
+      const data = await response.json();
+      const analysis = data.choices[0].message.content;
       
-      const dockerBuildStart = Date.now();
-      execSync(buildCommand, { stdio: 'inherit' });
-      const dockerBuildTime = Date.now() - dockerBuildStart;
-      
-      console.log(`⚡ Docker build completed in ${dockerBuildTime}ms`);
-      
-      // Stop existing container if it exists
+      // Parse the JSON response
+      let fixResult;
       try {
-        execSync(`docker stop "${appName}"`, { stdio: 'ignore' });
-        execSync(`docker rm "${appName}"`, { stdio: 'ignore' });
-      } catch {}
+        fixResult = JSON.parse(analysis);
+      } catch (parseError) {
+        console.log(`⚠️  Failed to parse LLM response: ${parseError.message}`);
+        return { success: false, error: 'Failed to parse LLM response' };
+      }
 
-      // Check if container name is already in use
-      let containerName = appName;
-      try {
-        const containerExists = execSync(`docker ps -a --filter "name=${appName}" --format "{{.Names}}"`, { encoding: 'utf8' }).trim();
-        if (containerExists) {
-          console.log(`⚠️  Container name ${appName} already exists, using unique name`);
-          containerName = `${appName}-${Date.now()}`;
+      if (fixResult.success && fixResult.changes) {
+        // Apply the suggested fixes
+        console.log(`🔧 Applying ${fixResult.changes.length} fixes...`);
+        
+        for (const change of fixResult.changes) {
+          try {
+            // Security: Validate file path and check allowlist
+            this.validateFilePath(change.file, appPath);
+            
+            if (!this.isAllowedFile(change.file)) {
+              console.log(`🚫 Blocked modification to restricted file: ${change.file}`);
+              continue;
+            }
+            
+            const filePath = path.join(appPath, change.file);
+            
+            switch (change.action) {
+              case 'create':
+              case 'modify':
+                // Security: Sanitize content before writing
+                const sanitizedContent = this.sanitizeLLMContent(change.content);
+                
+                // Ensure directory exists
+                await fs.mkdir(path.dirname(filePath), { recursive: true });
+                await fs.writeFile(filePath, sanitizedContent);
+                console.log(`✅ ${change.action === 'create' ? 'Created' : 'Modified'}: ${change.file}`);
+                break;
+                
+              case 'delete':
+                await fs.unlink(filePath);
+                console.log(`✅ Deleted: ${change.file}`);
+                break;
+            }
+          } catch (fileError) {
+            console.log(`⚠️  Failed to apply change to ${change.file}: ${fileError.message}`);
+          }
         }
-      } catch {}
-
-      // Run new container (use original appName for image, containerName for container)
-      console.log(`🚀 Starting container on port ${port}...`);
-      execSync(`docker run -d --name "${containerName}" -p ${port}:3000 "${appName}"`, { stdio: 'inherit' });
-      
-      const totalBuildTime = Date.now() - buildStartTime;
-      console.log(`📊 Total build time: ${totalBuildTime}ms (Docker: ${dockerBuildTime}ms)`);
-      
-      return { 
-        success: true, 
-        port, 
-        appType,
-        buildMetrics: {
-          totalBuildTime,
-          dockerBuildTime,
-          optimized: useOptimized
-        }
-      };
+        
+        return {
+          success: true,
+          fixDescription: fixResult.fixDescription || 'Applied automatic fixes'
+        };
+      } else {
+        return {
+          success: false,
+          error: fixResult.error || 'LLM could not determine a fix'
+        };
+      }
     } catch (error) {
-      console.error(`❌ Docker error: ${error.message}`);
+      console.log(`⚠️  Error analysis failed: ${error.message}`);
       return { success: false, error: error.message };
     }
   }
@@ -1649,7 +1961,7 @@ export default {
       execSync(`docker run -d --name "${newContainerName}" -p ${tempPort}:3000 "${newContainerName}"`, { stdio: 'inherit' });
       
       // 3. Health check the new container
-      console.log(`🏥 Running health checks...`);
+      console.log(`🏥 Running health checks on temporary port ${tempPort}...`);
       const healthOk = await this.healthCheckContainer(newContainerName, tempPort);
       
       if (!healthOk) {
@@ -1676,7 +1988,8 @@ export default {
       execSync(`docker rm "${newContainerName}"`, { stdio: 'ignore' });
       execSync(`docker run -d --name "${newContainerName}" -p ${port}:3000 "${newContainerName}"`, { stdio: 'inherit' });
       
-      // 6. Final health check
+      // 6. Final health check on production port
+      console.log(`🏥 Running final health check on production port ${port}...`);
       const finalHealthOk = await this.healthCheckContainer(newContainerName, port);
       
       if (!finalHealthOk) {
@@ -1700,8 +2013,8 @@ export default {
     }
   }
 
-  async healthCheckContainer(containerName, port) {
-    // Simple health check - verify container is running and responding
+  async healthCheckContainer(containerName, port, timeoutMs = 15000) {
+    // Comprehensive health check - verify container is running and responding
     try {
       // Check if container is running
       const runningContainers = execSync(`docker ps --filter "name=${containerName}" --format "{{.Names}}"`, { encoding: 'utf8' });
@@ -1711,35 +2024,36 @@ export default {
       }
       
       // Wait a moment for startup
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await new Promise(resolve => setTimeout(resolve, 2000));
       
-      // Try to connect to the port (basic check)
-      try {
-        const { spawn } = await import('child_process');
-        const testConnection = spawn('nc', ['-z', 'localhost', port.toString()], { stdio: 'ignore' });
-        
-        return new Promise((resolve) => {
-          testConnection.on('close', (code) => {
-            if (code === 0) {
-              console.log(`✅ Health check passed for ${containerName}`);
-              resolve(true);
-            } else {
-              console.log(`❌ Health check failed for ${containerName} (port ${port} not responding)`);
-              resolve(false);
-            }
-          });
-          
-          // Timeout after 10 seconds
-          setTimeout(() => {
-            testConnection.kill();
-            console.log(`❌ Health check timeout for ${containerName}`);
+      // Try HTTP health check with timeout
+      return new Promise((resolve) => {
+        const timeoutId = setTimeout(() => {
+          console.log(`❌ Health check timeout for ${containerName} after ${timeoutMs}ms`);
+          resolve(false);
+        }, timeoutMs);
+
+        // Use fetch for HTTP health check
+        fetch(`http://localhost:${port}`, {
+          method: 'HEAD',
+          signal: AbortSignal.timeout(timeoutMs - 1000) // Leave 1s buffer for cleanup
+        })
+        .then(response => {
+          clearTimeout(timeoutId);
+          if (response.ok) {
+            console.log(`✅ Health check passed for ${containerName} (HTTP ${response.status})`);
+            resolve(true);
+          } else {
+            console.log(`❌ Health check failed for ${containerName} (HTTP ${response.status})`);
             resolve(false);
-          }, 10000);
+          }
+        })
+        .catch(error => {
+          clearTimeout(timeoutId);
+          console.log(`❌ Health check failed for ${containerName}: ${error.message}`);
+          resolve(false);
         });
-      } catch (error) {
-        console.log(`⚠️  Could not test port connection: ${error.message}`);
-        return true; // Assume healthy if we can't test
-      }
+      });
       
     } catch (error) {
       console.log(`❌ Health check error: ${error.message}`);
@@ -2079,6 +2393,8 @@ IMPORTANT: This is an improvement to an existing app, not a new app creation. Ma
           isActive: dockerResult.success,
           dockerStatus: dockerResult.success ? 'running' : 'failed',
           dockerError: dockerResult.error || null,
+          dockerLogs: dockerResult.dockerLogs || null,
+          attempts: dockerResult.attempts || 1,
           parentVersion: null,
           changedFiles: [],
           addedFiles: createdFiles,
@@ -2105,6 +2421,17 @@ IMPORTANT: This is an improvement to an existing app, not a new app creation. Ma
       } else {
         console.log(`⚠️  App ${appName} files created but Docker build failed!`);
         console.log(`❌ Docker error: ${dockerResult.error}`);
+        
+        if (dockerResult.dockerLogs) {
+          console.log(`📋 Docker logs (last ${Math.min(500, dockerResult.dockerLogs.length)} chars):`);
+          console.log(dockerResult.dockerLogs.slice(-500));
+        }
+        
+        if (dockerResult.attempts > 1) {
+          console.log(`🔄 Build attempted ${dockerResult.attempts} times with automatic fixes`);
+        }
+        
+        console.log(`💡 You can manually fix the issues and run: docker build -t ${appName} ${appPath}`);
       }
       console.log(`📁 Files created in: ${appPath}`);
       
@@ -2283,6 +2610,56 @@ IMPORTANT: This is an improvement to an existing app, not a new app creation. Ma
     
     console.log(`🗑️  Removed ${appName} completely`);
   }
+
+  async retryDockerBuild(appName) {
+    const app = this.findApp(appName);
+    if (!app) {
+      console.log(`❌ App ${appName} not found`);
+      return;
+    }
+
+    const appPath = path.join('./tmp', appName);
+    
+    // Check if app directory exists
+    try {
+      await fs.access(appPath);
+    } catch {
+      console.log(`❌ App directory not found: ${appPath}`);
+      return;
+    }
+
+    console.log(`🔄 Retrying Docker build for ${appName}...`);
+    
+    // Find available port
+    const port = await this.findAvailablePort(db.data.nextPort);
+    db.data.nextPort = port + 1;
+    
+    // Retry Docker build with enhanced error handling
+    const dockerResult = await this.buildAndRunDocker(appName, appPath, port, 3);
+    
+    // Update app info
+    const currentVersion = app.versions[app.versions.length - 1];
+    currentVersion.dockerStatus = dockerResult.success ? 'running' : 'failed';
+    currentVersion.dockerError = dockerResult.error || null;
+    currentVersion.dockerLogs = dockerResult.dockerLogs || null;
+    currentVersion.attempts = (currentVersion.attempts || 1) + (dockerResult.attempts || 1);
+    currentVersion.port = dockerResult.success ? port : currentVersion.port;
+    
+    await db.write();
+    
+    if (dockerResult.success) {
+      console.log(`✅ Docker build retry successful for ${appName}!`);
+      console.log(`🌐 Running at http://localhost:${port}`);
+    } else {
+      console.log(`❌ Docker build retry failed for ${appName}`);
+      console.log(`❌ Error: ${dockerResult.error}`);
+      
+      if (dockerResult.dockerLogs) {
+        console.log(`📋 Docker logs (last ${Math.min(500, dockerResult.dockerLogs.length)} chars):`);
+        console.log(dockerResult.dockerLogs.slice(-500));
+      }
+    }
+  }
 }
 
 // CLI setup
@@ -2330,6 +2707,11 @@ const argv = await yargs(hideBin(process.argv))
     describe: 'Remove an app completely',
     type: 'string'
   })
+  .option('retry', {
+    alias: 't',
+    describe: 'Retry Docker build for an app with automatic error fixes',
+    type: 'string'
+  })
   .option('legacy-build', {
     describe: 'Use legacy Docker build (disable optimizations)',
     type: 'boolean',
@@ -2374,6 +2756,8 @@ if (argv.list) {
   await generator.stopApp(argv.stop);
 } else if (argv.remove) {
   await generator.removeApp(argv.remove);
+} else if (argv.retry) {
+  await generator.retryDockerBuild(argv.retry);
 } else if (argv.improve) {
   if (!argv.app) {
     console.log('❌ Usage: --improve "improvement description" --app "app-name"');
