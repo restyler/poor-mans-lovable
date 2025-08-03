@@ -1,4 +1,4 @@
-export const createEnhancementPrompt = (prompt, analysis) => {
+export const createEnhancementPrompt = (prompt, analysis, isImprovement = false) => {
   let enhancementPrompt = `${prompt}. 
 
 ANALYSIS RESULTS:
@@ -9,14 +9,32 @@ ANALYSIS RESULTS:
 - Database: ${analysis.database}
 - Authentication: ${analysis.authentication}
 
+${isImprovement ? 'IMPROVEMENT MODE: This is an enhancement to an existing app. Make surgical changes rather than recreating everything.' : 'CREATION MODE: This is a new app creation.'}
+
 REQUIREMENTS:`;
 
   if (analysis.appType === 'frontend') {
     enhancementPrompt += `
 - Modern frontend with ${analysis.framework} and ${analysis.buildTool}
 - ${analysis.styling} styling
-- Interactive features and responsive design
+- Interactive features and responsive design`;
+
+    if (analysis.framework === 'vue') {
+      enhancementPrompt += `
+- IMPORTANT: Create src/main.js (NOT main.jsx) that imports { createApp } from 'vue'
+- CRITICAL: Create src/App.vue (NOT App.jsx) with <template>, <script>, and <style> sections
+- CRITICAL: In vite.config.js, use @vitejs/plugin-vue (NOT @vitejs/plugin-react)
+- CRITICAL: In package.json, include "vue" and "@vitejs/plugin-vue" dependencies
+- IMPORTANT: In main.js, import './index.css' and mount Vue app to #app`;
+    } else if (analysis.framework === 'react') {
+      enhancementPrompt += `
 - IMPORTANT: In main.jsx, import the CSS file: import './index.css'
+- CRITICAL: Create src/main.jsx and src/App.jsx for React components
+- CRITICAL: In vite.config.js, use @vitejs/plugin-react
+- CRITICAL: In package.json, include "react" and "react-dom" dependencies`;
+    }
+
+    enhancementPrompt += `
 - CRITICAL: Always create src/index.css with @import "tailwindcss";
 - CRITICAL: For Tailwind CSS v4, create postcss.config.js with proper PostCSS plugin
 - CRITICAL: Always create index.html in the root directory for Vite apps`;
@@ -37,11 +55,26 @@ REQUIREMENTS:`;
 - CRITICAL: API routes must come BEFORE the catch-all route that serves index.html
 - CRITICAL: Include express in dependencies and fs import in server.js
 - CRITICAL: For full-stack apps, build frontend and serve via Express
-- CRITICAL: Always create index.html in the root directory for Vite apps with proper HTML content
+- CRITICAL: Always create index.html in the root directory for Vite apps with proper HTML content`;
+
+    if (analysis.framework === 'vue') {
+      enhancementPrompt += `
+- CRITICAL: Create src/main.js (NOT main.jsx) that imports { createApp } from 'vue'
+- CRITICAL: Create src/App.vue (NOT App.jsx) with <template>, <script>, and <style> sections
+- CRITICAL: In vite.config.js, use @vitejs/plugin-vue (NOT @vitejs/plugin-react)
+- CRITICAL: In package.json, include "vue" and "@vitejs/plugin-vue" dependencies
+- CRITICAL: index.html must contain <div id="app"></div> (NOT #root) for Vue mounting`;
+    } else if (analysis.framework === 'react') {
+      enhancementPrompt += `
 - CRITICAL: Always create src/main.jsx and src/App.jsx for React apps
+- CRITICAL: In vite.config.js, use @vitejs/plugin-react
+- CRITICAL: In package.json, include "react" and "react-dom" dependencies
+- CRITICAL: index.html must contain <div id="root"></div> for React mounting`;
+    }
+
+    enhancementPrompt += `
 - CRITICAL: Always create src/index.css with @import "tailwindcss"; for Tailwind v4
 - CRITICAL: For Tailwind CSS v4, create postcss.config.js with proper PostCSS plugin
-- CRITICAL: index.html must contain proper HTML structure with <!DOCTYPE html>, <html>, <head>, <body>, and <div id="root"></div>
 - ${analysis.authentication === 'true' ? 'Authentication system' : 'Basic functionality'}`;
   }
 
@@ -65,7 +98,15 @@ REQUIREMENTS:`;
   enhancementPrompt += `
 
 IMPORTANT: All JSON files (like package.json) must be valid JSON - no template literals, JavaScript expressions, or markdown code blocks. Just write the raw JSON content.
-Use this syntax for each file: <file path="filename.js">file content here</file>.`;
+
+OUTPUT FORMAT:
+Start with a brief explanation of what you're implementing:
+
+<changes>
+Brief explanation of what functionality is being added/modified
+</changes>
+
+Then include each file using this syntax: <file path="filename.js">file content here</file>.`;
 
   return enhancementPrompt;
 }; 

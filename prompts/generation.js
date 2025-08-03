@@ -1,4 +1,13 @@
-export const generationPrompt = (prompt) => `${prompt}. Use this syntax for each file: <file path="filename.js">file content here</file>. Make it a complete working application with proper structure. 
+export const generationPrompt = (prompt) => `${prompt}. 
+
+OUTPUT FORMAT:
+Start with a brief explanation of what you're implementing:
+
+<changes>
+Brief explanation of what functionality is being added/modified
+</changes>
+
+Then include each file using this syntax: <file path="filename.js">file content here</file>. Make it a complete working application with proper structure. 
 
 CRITICAL REQUIREMENTS:
 - If using Tailwind CSS v4, include "tailwindcss": "^4.1.11" AND "@tailwindcss/postcss": "^4.1.11" in devDependencies
@@ -14,7 +23,25 @@ CRITICAL REQUIREMENTS:
 - If using body parsing, include "body-parser": "^2.2.0" in dependencies
 - If using Express.js, ALWAYS include "express": "^4.18.2" in dependencies
 - If using React, ALWAYS include "react": "^18.2.0" and "react-dom": "^18.2.0" in dependencies
+- If using Vue, ALWAYS include "vue": "^3.3.0" in dependencies and "@vitejs/plugin-vue": "^4.2.1" in devDependencies
 - Always include ALL required dependencies in package.json
+
+FRAMEWORK-SPECIFIC REQUIREMENTS:
+FOR VUE APPLICATIONS:
+- CRITICAL: Create src/main.js (NOT main.jsx) that imports { createApp } from 'vue'
+- CRITICAL: Create src/App.vue (NOT App.jsx) with proper Vue Single File Component structure
+- CRITICAL: Use @vitejs/plugin-vue in vite.config.js, NOT @vitejs/plugin-react
+- CRITICAL: Include "vue": "^3.3.0" and "@vitejs/plugin-vue": "^4.2.1" in package.json
+- CRITICAL: Mount Vue app to element with id="app" (NOT id="root")
+- CRITICAL: App.vue must have <template>, <script>, and <style> sections
+- CRITICAL: Use .vue file extension for Vue components, NOT .jsx
+
+FOR REACT APPLICATIONS:
+- CRITICAL: Create src/main.jsx with React imports and ReactDOM.createRoot
+- CRITICAL: Create src/App.jsx with React component syntax
+- CRITICAL: Use @vitejs/plugin-react in vite.config.js
+- CRITICAL: Mount React app to element with id="root"
+- CRITICAL: Use .jsx file extension for React components
 - For SQLite databases, use path './data/database.db' or './data/[appname].db'
 - Ensure all npm scripts reference installed packages only
 - Double-check that every require() or import statement has a corresponding dependency in package.json

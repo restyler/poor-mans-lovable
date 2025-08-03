@@ -74,16 +74,62 @@ Completely removes:
 - Local files and directories
 - App tracking from database
 
+## Continuous Improvement
+
+### Improve an Existing App
+```bash
+node create-app.js --improve "Add user authentication" --app todo-app
+```
+
+Continuously enhance apps with new features:
+- 🔄 **Semantic Versioning**: Each improvement creates a new version (v1.0.0 → v1.1.0)
+- 🐳 **Blue-Green Deployment**: Zero-downtime updates with automatic rollback
+- 📝 **Change Tracking**: Monitors which files were modified, added, or removed
+- 🔙 **Rollback Support**: Restore previous versions if improvements fail
+- ⚡ **Optimized Builds**: 5-10x faster rebuilds using Docker layer caching
+
+### Version Management
+```bash
+# View all versions of an app
+node create-app.js --versions todo-app
+
+# Rollback to a previous version
+node create-app.js --rollback todo-app v1.0.0
+
+# Compare versions
+node create-app.js --diff todo-app v1.0.0 v1.1.0
+```
+
+### Improvement Examples
+```bash
+# Add new features
+node create-app.js --improve "Add dark mode toggle" --app todo-app
+node create-app.js --improve "Add user authentication" --app blog-app
+node create-app.js --improve "Add real-time notifications" --app chat-app
+
+# Enhance UI/UX
+node create-app.js --improve "Make responsive for mobile" --app portfolio-site
+node create-app.js --improve "Add search functionality" --app blog-app
+
+# Backend improvements
+node create-app.js --improve "Add API rate limiting" --app todo-api
+node create-app.js --improve "Add data validation" --app user-service
+```
+
 ## Features
 
 - 🤖 **AI-Powered Generation**: Uses Cerebras AI to generate complete applications
+- 🔄 **Continuous Improvement**: Iteratively enhance apps with version management and rollback
 - 📁 **Organized Structure**: Each app gets its own folder in `./tmp/`
 - 🐳 **Docker Integration**: Automatic containerization and port management
+- ⚡ **Optimized Builds**: Multi-stage Docker builds with layer caching for 5-10x faster rebuilds
+- 🔙 **Blue-Green Deployment**: Zero-downtime updates with automatic rollback on failure
 - 📊 **Performance Tracking**: Displays API latency and token usage
-- 🗂️ **App Management**: JSON-based storage to track all generated apps
+- 🗂️ **App Management**: JSON-based storage to track all generated apps with full version history
 - 🔒 **Safe Generation**: Generated files are isolated in tmp/ to protect your project
 - 🎨 **Tailwind CSS v4 Support**: Proper PostCSS configuration and modern styling
 - 🧠 **Intelligent Analysis**: LLM-powered app structure detection and optimization
+- 📝 **Change Tracking**: File-level diff tracking and semantic versioning
 
 ## Generated App Structure
 

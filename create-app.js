@@ -9,6 +9,7 @@ import { hideBin } from 'yargs/helpers';
 import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
 import { analysisPrompt, generationPrompt, createEnhancementPrompt } from './prompts/index.js';
+import nunjucks from 'nunjucks';
 
 dotenv.config();
 
@@ -31,10 +32,10 @@ class CerebrasAppGenerator {
 
   generateAppName(prompt) {
     // Extract key words and create descriptive name
-    const words = prompt.toLowerCase()
+    const words = prompt.trim().toLowerCase()
       .replace(/[^\w\s]/g, '')
       .split(/\s+/)
-      .filter(word => !['a', 'an', 'the', 'with', 'and', 'or', 'but', 'build', 'create', 'make'].includes(word))
+      .filter(word => word.length > 0 && !['a', 'an', 'the', 'with', 'and', 'or', 'but', 'build', 'create', 'make'].includes(word))
       .slice(0, 3);
     
     const appName = words.join('-') || 'generated-app';
@@ -46,7 +47,17 @@ class CerebrasAppGenerator {
   sanitizeName(name) {
     // Only allow alphanumeric characters, hyphens, and underscores
     // Remove any path separators or shell injection characters
-    return name.replace(/[^a-zA-Z0-9\-_]/g, '').toLowerCase();
+    let sanitized = name.replace(/[^a-zA-Z0-9\-_]/g, '').toLowerCase();
+    
+    // Docker tag requirements: cannot start or end with hyphens or underscores
+    sanitized = sanitized.replace(/^[-_]+/, '').replace(/[-_]+$/, '');
+    
+    // Ensure we still have a valid name
+    if (!sanitized) {
+      sanitized = 'generated-app';
+    }
+    
+    return sanitized;
   }
 
   validateFilePath(filePath) {
@@ -93,7 +104,8 @@ class CerebrasAppGenerator {
       }
 
       const data = await response.json();
-      const analysis = JSON.parse(data.choices[0].message.content);
+      const content = this.cleanJsonContent(data.choices[0].message.content);
+      const analysis = JSON.parse(content);
       
       console.log(`📊 Analysis: ${analysis.appType} app with ${analysis.framework} + ${analysis.buildTool}`);
       console.log(`🎨 Styling: ${analysis.styling}, 🗄️ DB: ${analysis.database}, 🔐 Auth: ${analysis.authentication}`);
@@ -435,10 +447,10 @@ button:focus-visible {
     await fs.writeFile(path.join(appPath, 'src/App.css'), appCss);
   }
 
-  async enhanceWithLLM(prompt, appName, appPath, analysis) {
+  async enhanceWithLLM(prompt, appName, appPath, analysis, isImprovement = false) {
     console.log(`🤖 Enhancing ${appName} with LLM customization...`);
     
-    const enhancementPrompt = createEnhancementPrompt(prompt, analysis);
+    const enhancementPrompt = createEnhancementPrompt(prompt, analysis, isImprovement);
     
     return await this.chatWithCerebras(enhancementPrompt, appName, appPath);
   }
@@ -487,8 +499,17 @@ button:focus-visible {
 
   async parseAndCreateFiles(appPath, output) {
     const fileRegex = /<file path="([^"]+)">([\s\S]*?)<\/file>/g;
+    const changesRegex = /<changes>([\s\S]*?)<\/changes>/g;
     let match;
     const createdFiles = [];
+    let changesExplanation = '';
+
+    // Extract changes explanation
+    const changesMatch = changesRegex.exec(output);
+    if (changesMatch) {
+      changesExplanation = changesMatch[1].trim();
+      console.log(`📝 Changes explanation: ${changesExplanation}`);
+    }
 
     while ((match = fileRegex.exec(output)) !== null) {
       const originalPath = match[1];
@@ -522,7 +543,10 @@ button:focus-visible {
           fileContent = this.cleanHtmlContent(fileContent);
         }
         
-        console.log(`📄 Creating file: ${relativePath}`);
+        // Check if file already exists
+        const fileExists = await fs.access(filePath).then(() => true).catch(() => false);
+        const action = fileExists ? 'Updating' : 'Creating';
+        console.log(`📄 ${action} file: ${relativePath}`);
         
         // Create directory if it doesn't exist
         const dir = path.dirname(filePath);
@@ -536,7 +560,7 @@ button:focus-visible {
       }
     }
     
-    return createdFiles;
+    return { createdFiles, changesExplanation };
   }
 
   cleanJsonContent(content) {
@@ -629,6 +653,50 @@ button:focus-visible {
     }
     
     throw new Error(`Could not find available port starting from ${startPort}`);
+  }
+
+  async detectAppFolders(appPath) {
+    console.log(`🔍 Detecting app folders in ${appPath}...`);
+    
+    const folders = [];
+    const excludeDirs = ['node_modules', '.git', '.backups', 'dist', 'build', '.vscode'];
+    
+    try {
+      const entries = await fs.readdir(appPath, { withFileTypes: true });
+      
+      for (const entry of entries) {
+        if (entry.isDirectory() && !excludeDirs.includes(entry.name)) {
+          // Check if folder contains files (not empty)
+          try {
+            const folderPath = path.join(appPath, entry.name);
+            const folderEntries = await fs.readdir(folderPath, { withFileTypes: true });
+            const hasFiles = folderEntries.some(item => item.isFile());
+            
+            if (hasFiles) {
+              folders.push(entry.name);
+              console.log(`📁 Found app folder: ${entry.name}`);
+            }
+          } catch (error) {
+            console.log(`⚠️  Could not read folder ${entry.name}: ${error.message}`);
+          }
+        }
+      }
+      
+      console.log(`📊 Detected ${folders.length} app folders: ${folders.join(', ')}`);
+      return folders;
+    } catch (error) {
+      console.log(`⚠️  Could not detect app folders: ${error.message}`);
+      return [];
+    }
+  }
+
+  generateDockerCopyCommands(folders) {
+    if (!folders || folders.length === 0) {
+      return '';
+    }
+    
+    const copyCommands = folders.map(folder => `COPY ${folder}/ ./${folder}/`).join('\n');
+    return copyCommands;
   }
 
   async applyPostGenerationFixes(appPath, analysis) {
@@ -751,8 +819,69 @@ export default {
           // CSS file doesn't exist or can't be read, that's okay
         }
       }
+
+      // Fix 8: Ensure Vue files have proper closing tags
+      if (analysis.framework === 'vue') {
+        const vueFiles = await this.findVueFiles(appPath);
+        for (const vueFile of vueFiles) {
+          await this.fixVueSyntax(vueFile);
+        }
+      }
     } catch (error) {
       console.log(`⚠️  Could not apply post-generation fixes: ${error.message}`);
+    }
+  }
+
+  async findVueFiles(appPath) {
+    const vueFiles = [];
+    
+    async function searchDir(dir) {
+      try {
+        const entries = await fs.readdir(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          if (entry.isDirectory() && entry.name !== 'node_modules' && entry.name !== 'dist') {
+            await searchDir(fullPath);
+          } else if (entry.isFile() && entry.name.endsWith('.vue')) {
+            vueFiles.push(fullPath);
+          }
+        }
+      } catch (error) {
+        // Directory doesn't exist or can't be read
+      }
+    }
+    
+    await searchDir(appPath);
+    return vueFiles;
+  }
+
+  async fixVueSyntax(vueFilePath) {
+    try {
+      let content = await fs.readFile(vueFilePath, 'utf8');
+      let fixed = false;
+
+      // Check if <script> tag is opened but not closed
+      const scriptOpenMatch = content.match(/<script[^>]*>/);
+      const scriptCloseMatch = content.match(/<\/script>/);
+      
+      if (scriptOpenMatch && !scriptCloseMatch) {
+        // Add missing </script> tag
+        content += '\n</script>';
+        fixed = true;
+      }
+
+      // Check if <style> section is missing (common in Vue files)
+      if (!content.includes('<style') && content.includes('<script>')) {
+        content += '\n\n<style scoped>\n/* Add your styles here */\n</style>';
+        fixed = true;
+      }
+
+      if (fixed) {
+        await fs.writeFile(vueFilePath, content);
+        console.log(`🔧 Fixed: Vue syntax issues in ${path.basename(vueFilePath)}`);
+      }
+    } catch (error) {
+      console.log(`⚠️  Could not fix Vue syntax in ${vueFilePath}: ${error.message}`);
     }
   }
 
@@ -762,6 +891,7 @@ export default {
       appName = this.sanitizeName(appName);
       
       console.log(`🐳 Building Docker image for ${appName}...`);
+      const buildStartTime = Date.now();
       
       // Create or regenerate Dockerfile
       const dockerfilePath = path.join(appPath, 'Dockerfile');
@@ -790,24 +920,51 @@ export default {
         console.log(`⚠️  Could not analyze package.json, using backend-only template: ${error.message}`);
       }
       
-             // Select appropriate Dockerfile template
-       let templatePath;
-       const currentDir = path.dirname(fileURLToPath(import.meta.url));
-       switch (appType) {
-         case 'fullstack':
-           templatePath = path.join(currentDir, 'templates/Dockerfile.fullstack');
-           break;
-         case 'frontend-only':
-           templatePath = path.join(currentDir, 'templates/Dockerfile.frontend-only');
-           break;
-         case 'backend-only':
-         default:
-           templatePath = path.join(currentDir, 'templates/Dockerfile.backend-only');
-           break;
-       }
+      // Smart build strategy: Use optimized Dockerfiles
+      const currentDir = path.dirname(fileURLToPath(import.meta.url));
+      const useOptimized = process.env.DOCKER_OPTIMIZED !== 'false'; // Default to optimized
       
-      // Copy template to app directory
-      const dockerfile = await fs.readFile(templatePath, 'utf8');
+      let templatePath;
+      if (useOptimized) {
+        console.log(`⚡ Using optimized Docker build strategy`);
+        switch (appType) {
+          case 'fullstack':
+            templatePath = path.join(currentDir, 'templates/Dockerfile.fullstack.optimized');
+            break;
+          case 'frontend-only':
+            templatePath = path.join(currentDir, 'templates/Dockerfile.frontend-only.optimized');
+            break;
+          case 'backend-only':
+          default:
+            templatePath = path.join(currentDir, 'templates/Dockerfile.backend-only.optimized');
+            break;
+        }
+      } else {
+        console.log(`🐌 Using legacy Docker build strategy`);
+        switch (appType) {
+          case 'fullstack':
+            templatePath = path.join(currentDir, 'templates/Dockerfile.fullstack');
+            break;
+          case 'frontend-only':
+            templatePath = path.join(currentDir, 'templates/Dockerfile.frontend-only');
+            break;
+          case 'backend-only':
+          default:
+            templatePath = path.join(currentDir, 'templates/Dockerfile.backend-only');
+            break;
+        }
+      }
+      
+      // Detect app folders for dynamic Dockerfile generation
+      const appFolders = await this.detectAppFolders(appPath);
+      
+      // Read template and render with nunjucks
+      const templateContent = await fs.readFile(templatePath, 'utf8');
+      const dockerfile = nunjucks.renderString(templateContent, {
+        appFolders: appFolders
+      });
+      
+      // Write rendered Dockerfile to app directory
       await fs.writeFile(dockerfilePath, dockerfile);
 
       // Security: Use absolute paths and validate port number
@@ -815,8 +972,15 @@ export default {
         throw new Error(`Invalid port number: ${port}`);
       }
 
-      // Build Docker image
-      execSync(`docker build -t "${appName}" "${appPath}"`, { stdio: 'inherit' });
+      // Advanced Docker build with BuildKit and caching
+      const buildCommand = this.createOptimizedBuildCommand(appName, appPath, useOptimized);
+      console.log(`🔨 Build command: ${buildCommand}`);
+      
+      const dockerBuildStart = Date.now();
+      execSync(buildCommand, { stdio: 'inherit' });
+      const dockerBuildTime = Date.now() - dockerBuildStart;
+      
+      console.log(`⚡ Docker build completed in ${dockerBuildTime}ms`);
       
       // Stop existing container if it exists
       try {
@@ -825,23 +989,973 @@ export default {
       } catch {}
 
       // Check if container name is already in use
+      let containerName = appName;
       try {
         const containerExists = execSync(`docker ps -a --filter "name=${appName}" --format "{{.Names}}"`, { encoding: 'utf8' }).trim();
         if (containerExists) {
           console.log(`⚠️  Container name ${appName} already exists, using unique name`);
-          const uniqueName = `${appName}-${Date.now()}`;
-          appName = uniqueName;
+          containerName = `${appName}-${Date.now()}`;
         }
       } catch {}
 
-      // Run new container
+      // Run new container (use original appName for image, containerName for container)
       console.log(`🚀 Starting container on port ${port}...`);
-      execSync(`docker run -d --name "${appName}" -p ${port}:3000 "${appName}"`, { stdio: 'inherit' });
+      execSync(`docker run -d --name "${containerName}" -p ${port}:3000 "${appName}"`, { stdio: 'inherit' });
       
-      return { success: true, port, appType };
+      const totalBuildTime = Date.now() - buildStartTime;
+      console.log(`📊 Total build time: ${totalBuildTime}ms (Docker: ${dockerBuildTime}ms)`);
+      
+      return { 
+        success: true, 
+        port, 
+        appType,
+        buildMetrics: {
+          totalBuildTime,
+          dockerBuildTime,
+          optimized: useOptimized
+        }
+      };
     } catch (error) {
       console.error(`❌ Docker error: ${error.message}`);
       return { success: false, error: error.message };
+    }
+  }
+
+  createOptimizedBuildCommand(appName, appPath, useOptimized) {
+    // Security: Sanitize inputs for shell commands
+    const sanitizedAppName = this.sanitizeName(appName);
+    const sanitizedPath = appPath.replace(/"/g, '\\"');
+    
+    if (useOptimized) {
+      // Use BuildKit with advanced caching for optimized builds
+      return `DOCKER_BUILDKIT=1 docker build \\
+        --cache-from "${sanitizedAppName}:latest" \\
+        --cache-from "${sanitizedAppName}:deps" \\
+        --cache-from "${sanitizedAppName}:builder" \\
+        --target runtime \\
+        -t "${sanitizedAppName}:latest" \\
+        -t "${sanitizedAppName}" \\
+        "${sanitizedPath}"`;
+    } else {
+      // Legacy build command
+      return `docker build -t "${sanitizedAppName}" "${sanitizedPath}"`;
+    }
+  }
+
+  async benchmarkBuilds(prompt) {
+    console.log(`🏁 Benchmarking optimized vs legacy builds for: "${prompt}"`);
+    console.log('━'.repeat(80));
+    
+    const baseAppName = this.generateAppName(prompt);
+    
+    // Test 1: Legacy build
+    console.log('\n🐌 Testing Legacy Build...');
+    process.env.DOCKER_OPTIMIZED = 'false';
+    const legacyAppName = `${baseAppName}-legacy`;
+    const legacyResult = await this.createAppForBenchmark(prompt, legacyAppName);
+    
+    // Test 2: Optimized build  
+    console.log('\n⚡ Testing Optimized Build...');
+    process.env.DOCKER_OPTIMIZED = 'true';
+    const optimizedAppName = `${baseAppName}-optimized`;
+    const optimizedResult = await this.createAppForBenchmark(prompt, optimizedAppName);
+    
+    // Test 3: Second optimized build (to test caching)
+    console.log('\n🚀 Testing Optimized Build with Cache...');
+    const cachedAppName = `${baseAppName}-cached`;
+    const cachedResult = await this.createAppForBenchmark(prompt, cachedAppName);
+    
+    // Display comparison
+    this.displayBenchmarkResults(legacyResult, optimizedResult, cachedResult);
+  }
+
+  async createAppForBenchmark(prompt, appName) {
+    const startTime = Date.now();
+    
+    try {
+      const appPath = path.join('./tmp', appName);
+      
+      // Check if app already exists and remove it
+      const existingApp = db.data.apps.find(app => app.name === appName);
+      if (existingApp) {
+        await this.removeApp(appName);
+      }
+      
+      // Create app directory
+      await fs.mkdir(appPath, { recursive: true });
+      
+      // Analyze and generate app (same as normal flow but with custom name)
+      const analysis = await this.analyzeAppStructure(prompt);
+      
+      let result;
+      if (analysis.appType === 'frontend' && analysis.buildTool === 'vite') {
+        const scaffoldSuccess = await this.scaffoldWithVite(appName, appPath);
+        if (scaffoldSuccess) {
+          result = await this.enhanceWithLLM(prompt, appName, appPath, analysis, false);
+        } else {
+          result = await this.chatWithCerebras(prompt, appName, appPath);
+        }
+      } else {
+        result = await this.chatWithCerebras(prompt, appName, appPath);
+      }
+      
+      // Parse and create files
+      const { createdFiles, changesExplanation } = await this.parseAndCreateFiles(appPath, result.output);
+      
+      // Display changes and files information (for benchmark mode, keep it minimal)
+      if (changesExplanation) {
+        console.log(`   📋 Changes: ${changesExplanation.split('\n')[0]}`); // Show first line only
+      }
+      console.log(`   📁 Files: ${createdFiles.length} created`);
+      
+      await this.applyPostGenerationFixes(appPath, analysis);
+      
+      // Find available port
+      const port = await this.findAvailablePort(db.data.nextPort);
+      db.data.nextPort = port + 1;
+      
+      // Build and run Docker container (this is what we're benchmarking)
+      const dockerResult = await this.buildAndRunDocker(appName, appPath, port);
+      
+      const totalTime = Date.now() - startTime;
+      
+      return {
+        appName,
+        totalTime,
+        dockerBuildTime: dockerResult.buildMetrics?.dockerBuildTime || 0,
+        success: dockerResult.success,
+        optimized: dockerResult.buildMetrics?.optimized || false,
+        appType: analysis.appType
+      };
+      
+    } catch (error) {
+      console.error(`❌ Benchmark failed for ${appName}: ${error.message}`);
+      return {
+        appName,
+        totalTime: Date.now() - startTime,
+        dockerBuildTime: 0,
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // =================== VERSION MANAGEMENT FUNCTIONS ===================
+  
+  findApp(appName) {
+    return db.data.apps.find(app => app.name === appName);
+  }
+
+  getCurrentVersion(appName) {
+    const app = this.findApp(appName);
+    if (!app) return null;
+    
+    return app.versions.find(v => v.version === app.currentVersion);
+  }
+
+  async generateFileHashes(appPath, files) {
+    const hashes = {};
+    const crypto = await import('crypto');
+    
+    for (const file of files) {
+      try {
+        const filePath = path.join(appPath, file);
+        const content = await fs.readFile(filePath, 'utf8');
+        hashes[file] = crypto.createHash('sha256').update(content).digest('hex');
+      } catch (error) {
+        console.log(`⚠️  Could not hash ${file}: ${error.message}`);
+        hashes[file] = 'unknown';
+      }
+    }
+    
+    return hashes;
+  }
+
+  detectChangedFiles(oldHashes, newHashes) {
+    const changedFiles = [];
+    const addedFiles = [];
+    const removedFiles = [];
+    
+    // Find changed and added files
+    for (const [file, hash] of Object.entries(newHashes)) {
+      if (!oldHashes[file]) {
+        addedFiles.push(file);
+      } else if (oldHashes[file] !== hash) {
+        changedFiles.push(file);
+      }
+    }
+    
+    // Find removed files
+    for (const file of Object.keys(oldHashes)) {
+      if (!newHashes[file]) {
+        removedFiles.push(file);
+      }
+    }
+    
+    return { changedFiles, addedFiles, removedFiles };
+  }
+
+  calculateSemanticVersion(currentVersion, changeType, changedFiles) {
+    const [major, minor, patch] = currentVersion.replace('v', '').split('.').map(Number);
+    
+    // Determine version bump based on changes
+    if (changeType === 'major' || changedFiles.includes('package.json')) {
+      return `v${major}.${minor + 1}.0`; // Minor bump for package.json changes
+    } else if (changeType === 'minor' || changedFiles.some(f => f.endsWith('.jsx') || f.endsWith('.js'))) {
+      return `v${major}.${minor}.${patch + 1}`; // Patch bump for code changes
+    } else {
+      return `v${major}.${minor}.${patch + 1}`; // Default patch bump
+    }
+  }
+
+  async createBackup(appName, version) {
+    const app = this.findApp(appName);
+    if (!app) throw new Error(`App ${appName} not found`);
+    
+    const appPath = path.join('./tmp', appName);
+    const backupPath = path.join(appPath, '.backups', version);
+    
+    try {
+      await fs.mkdir(backupPath, { recursive: true });
+      
+      // Copy all current files to backup
+      const currentVersion = this.getCurrentVersion(appName);
+      if (currentVersion && currentVersion.files) {
+        for (const file of currentVersion.files) {
+          const sourcePath = path.join(appPath, file);
+          const destPath = path.join(backupPath, file);
+          
+          try {
+            // Create directory structure in backup
+            await fs.mkdir(path.dirname(destPath), { recursive: true });
+            await fs.copyFile(sourcePath, destPath);
+          } catch (error) {
+            console.log(`⚠️  Could not backup ${file}: ${error.message}`);
+          }
+        }
+      }
+      
+      console.log(`💾 Created backup at ${backupPath}`);
+      return backupPath;
+    } catch (error) {
+      console.error(`❌ Backup failed: ${error.message}`);
+      return null;
+    }
+  }
+
+  async restoreFromBackup(appName, version) {
+    const app = this.findApp(appName);
+    if (!app) throw new Error(`App ${appName} not found`);
+    
+    const appPath = path.join('./tmp', appName);
+    const backupPath = path.join(appPath, '.backups', version);
+    
+    try {
+      // Check if backup exists
+      await fs.access(backupPath);
+      
+      // Get backup version info
+      const backupVersion = app.versions.find(v => v.version === version);
+      if (!backupVersion) {
+        throw new Error(`Version ${version} not found in database`);
+      }
+      
+      // Restore files from backup
+      for (const file of backupVersion.files) {
+        const sourcePath = path.join(backupPath, file);
+        const destPath = path.join(appPath, file);
+        
+        try {
+          await fs.mkdir(path.dirname(destPath), { recursive: true });
+          await fs.copyFile(sourcePath, destPath);
+        } catch (error) {
+          console.log(`⚠️  Could not restore ${file}: ${error.message}`);
+        }
+      }
+      
+      console.log(`🔄 Restored from backup: ${backupPath}`);
+      return true;
+    } catch (error) {
+      console.error(`❌ Restore failed: ${error.message}`);
+      return false;
+    }
+  }
+
+  async listVersions(appName) {
+    const app = this.findApp(appName);
+    if (!app) {
+      console.log(`❌ App ${appName} not found.`);
+      return;
+    }
+
+    console.log(`\n📋 Versions for ${appName}:`);
+    console.log('─'.repeat(80));
+    
+    for (const version of app.versions.reverse()) { // Show newest first
+      const status = version.isActive ? '🟢 Active' : '⚪ Inactive';
+      const improvements = version.improvements.length > 0 ? 
+        `\n   🔧 ${version.improvements.join(', ')}` : '';
+      
+      console.log(`${status} ${version.version} (${version.dockerStatus})`);
+      console.log(`   📝 ${version.prompt}${improvements}`);
+      
+      if (version.changesExplanation && version.changesExplanation.trim()) {
+        console.log(`   📋 Changes: ${version.changesExplanation}`);
+      }
+      
+      console.log(`   📊 ${version.changedFiles.length} changed, ${version.addedFiles.length} added, ${version.removedFiles.length} removed`);
+      console.log(`   🕐 ${new Date(version.createdAt).toLocaleString()}`);
+      
+      if (version.performance?.buildMetrics) {
+        const buildTime = version.performance.buildMetrics.dockerBuildTime;
+        const optimized = version.performance.buildMetrics.optimized ? '⚡' : '🐌';
+        console.log(`   ⏱️  Build: ${(buildTime / 1000).toFixed(1)}s ${optimized}`);
+      }
+      
+      console.log();
+    }
+  }
+
+  async showDiff(appName, fromVersion, toVersion) {
+    const app = this.findApp(appName);
+    if (!app) {
+      console.log(`❌ App ${appName} not found.`);
+      return;
+    }
+
+    const fromVer = app.versions.find(v => v.version === fromVersion);
+    const toVer = app.versions.find(v => v.version === toVersion);
+    
+    if (!fromVer || !toVer) {
+      console.log(`❌ Version not found. Available: ${app.versions.map(v => v.version).join(', ')}`);
+      return;
+    }
+
+    console.log(`\n🔍 Diff from ${fromVersion} to ${toVersion}:`);
+    console.log('─'.repeat(80));
+    
+    // Show improvements
+    if (toVer.improvements.length > 0) {
+      console.log(`🔧 Improvements: ${toVer.improvements.join(', ')}`);
+    }
+    
+    // Show changes explanation
+    if (toVer.changesExplanation && toVer.changesExplanation.trim()) {
+      console.log(`📋 Changes: ${toVer.changesExplanation}`);
+    }
+    
+    // Show file changes
+    if (toVer.changedFiles.length > 0) {
+      console.log(`📝 Modified: ${toVer.changedFiles.join(', ')}`);
+    }
+    
+    if (toVer.addedFiles.length > 0) {
+      console.log(`➕ Added: ${toVer.addedFiles.join(', ')}`);
+    }
+    
+    if (toVer.removedFiles.length > 0) {
+      console.log(`➖ Removed: ${toVer.removedFiles.join(', ')}`);
+    }
+    
+    // Show performance comparison
+    const fromPerf = fromVer.performance?.buildMetrics?.dockerBuildTime || 0;
+    const toPerf = toVer.performance?.buildMetrics?.dockerBuildTime || 0;
+    
+    if (fromPerf > 0 && toPerf > 0) {
+      const diff = toPerf - fromPerf;
+      const symbol = diff > 0 ? '📈' : '📉';
+      console.log(`${symbol} Build time: ${(fromPerf/1000).toFixed(1)}s → ${(toPerf/1000).toFixed(1)}s (${diff > 0 ? '+' : ''}${(diff/1000).toFixed(1)}s)`);
+    }
+    
+    console.log(`\n🕐 Created: ${new Date(toVer.createdAt).toLocaleString()}`);
+  }
+
+  async improveApp(appName, improvementPrompt) {
+    console.log(`🔧 Improving ${appName}: "${improvementPrompt}"`);
+    
+    const app = this.findApp(appName);
+    if (!app) {
+      console.log(`❌ App ${appName} not found. Use --list to see available apps.`);
+      return;
+    }
+    
+    const currentVersion = this.getCurrentVersion(appName);
+    if (!currentVersion) {
+      console.log(`❌ No current version found for ${appName}`);
+      return;
+    }
+    
+    const appPath = path.join('./tmp', appName);
+    
+    try {
+      // 1. Create backup of current version
+      console.log(`💾 Creating backup of ${currentVersion.version}...`);
+      const backupPath = await this.createBackup(appName, currentVersion.version);
+      if (!backupPath) {
+        throw new Error('Backup creation failed');
+      }
+      
+      // 2. Read current file contents for intelligent editing
+      console.log(`📖 Reading current file contents...`);
+      const currentFileContents = await this.readCurrentFileContents(appPath, currentVersion.files);
+      
+      // 3. Generate improvement using LLM with full context
+      console.log(`🤖 Generating improvements with file context...`);
+      const improvementContext = this.createImprovementContext(
+        currentVersion.prompt,
+        improvementPrompt,
+        currentVersion.files,
+        currentFileContents
+      );
+      
+      const result = await this.chatWithCerebras(improvementContext, appName, appPath);
+      
+      // 3. Parse and apply file changes
+      console.log(`📝 Applying file changes...`);
+      const { createdFiles, changesExplanation } = await this.parseAndCreateFiles(appPath, result.output);
+      
+      // Display changes and files information
+      if (changesExplanation) {
+        console.log(`\n📋 Changes Summary:`);
+        console.log(`   ${changesExplanation}`);
+      }
+      
+      console.log(`\n📁 Files Modified:`);
+      createdFiles.forEach(file => {
+        console.log(`   📄 ${file}`);
+      });
+      console.log(`   Total: ${createdFiles.length} files\n`);
+      
+      // 4. Generate new file hashes and detect changes
+      const allFiles = [...new Set([...currentVersion.files, ...createdFiles])];
+      const newFileHashes = await this.generateFileHashes(appPath, allFiles);
+      const { changedFiles, addedFiles, removedFiles } = this.detectChangedFiles(
+        currentVersion.fileHashes, 
+        newFileHashes
+      );
+      
+      if (changedFiles.length === 0 && addedFiles.length === 0 && removedFiles.length === 0) {
+        console.log(`⚠️  No changes detected. The improvement may not have been applied.`);
+        return;
+      }
+      
+      console.log(`📊 Changes: ${changedFiles.length} modified, ${addedFiles.length} added, ${removedFiles.length} removed`);
+      if (changedFiles.length > 0) console.log(`   📝 Modified: ${changedFiles.join(', ')}`);
+      if (addedFiles.length > 0) console.log(`   ➕ Added: ${addedFiles.join(', ')}`);
+      if (removedFiles.length > 0) console.log(`   ➖ Removed: ${removedFiles.join(', ')}`);
+      
+      // 5. Calculate new version number
+      const newVersion = this.calculateSemanticVersion(
+        currentVersion.version, 
+        'minor', 
+        [...changedFiles, ...addedFiles]
+      );
+      
+      console.log(`🏷️  New version: ${newVersion}`);
+      
+      // 6. Build new Docker container with versioned name
+      const containerName = `${appName}-${newVersion.replace(/\./g, '-')}`;
+      console.log(`🐳 Building container: ${containerName}`);
+      
+      const dockerResult = await this.buildVersionedContainer(appName, newVersion, containerName, appPath);
+      
+      if (!dockerResult.success) {
+        console.log(`❌ Docker build failed. Rolling back...`);
+        await this.restoreFromBackup(appName, currentVersion.version);
+        throw new Error(`Docker build failed: ${dockerResult.error}`);
+      }
+      
+      // 7. Deploy with blue-green strategy
+      const deployResult = await this.deployWithBlueGreen(appName, newVersion, containerName, app.port);
+      
+      if (!deployResult.success) {
+        console.log(`❌ Deployment failed. Rolling back...`);
+        await this.restoreFromBackup(appName, currentVersion.version);
+        throw new Error(`Deployment failed: ${deployResult.error}`);
+      }
+      
+      // 8. Update database with new version
+      const newVersionData = {
+        version: newVersion,
+        prompt: currentVersion.prompt,
+        improvements: [...currentVersion.improvements, improvementPrompt],
+        changesExplanation: changesExplanation,
+        containerName,
+        files: allFiles,
+        fileHashes: newFileHashes,
+        performance: {
+          latency: result.latency,
+          tokens: result.usage,
+          buildMetrics: dockerResult.buildMetrics
+        },
+        createdAt: new Date().toISOString(),
+        isActive: true,
+        dockerStatus: 'running',
+        dockerError: null,
+        parentVersion: currentVersion.version,
+        changedFiles,
+        addedFiles,
+        removedFiles,
+        backupPath
+      };
+      
+      // Mark old version as inactive
+      currentVersion.isActive = false;
+      
+      // Add new version
+      app.versions.push(newVersionData);
+      app.currentVersion = newVersion;
+      
+      await db.write();
+      
+      console.log(`✅ Successfully improved ${appName} to ${newVersion}!`);
+      console.log(`🌐 Running at http://localhost:${app.port}`);
+      console.log(`📊 Build time: ${(dockerResult.buildMetrics?.dockerBuildTime || 0) / 1000}s`);
+      
+    } catch (error) {
+      console.error(`❌ Improvement failed: ${error.message}`);
+      
+      // Attempt automatic rollback
+      console.log(`🔄 Attempting automatic rollback...`);
+      try {
+        await this.restoreFromBackup(appName, currentVersion.version);
+        console.log(`✅ Rollback successful`);
+      } catch (rollbackError) {
+        console.error(`❌ Rollback also failed: ${rollbackError.message}`);
+      }
+    }
+  }
+
+  async buildVersionedContainer(appName, version, containerName, appPath) {
+    // Use the same optimized build strategy, but with versioned container name
+    const buildStartTime = Date.now();
+    
+    try {
+      // Detect app type for appropriate Dockerfile
+      const packageJsonPath = path.join(appPath, 'package.json');
+      let appType = 'backend-only';
+      
+      try {
+        const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
+        const hasVite = packageJson.devDependencies?.vite || packageJson.dependencies?.vite;
+        const hasExpress = packageJson.dependencies?.express;
+        const hasServerFile = await fs.access(path.join(appPath, 'server.js')).then(() => true).catch(() => false);
+        
+        if (hasVite && hasExpress && hasServerFile) {
+          appType = 'fullstack';
+        } else if (hasVite) {
+          appType = 'frontend-only';
+        } else if (hasExpress || hasServerFile) {
+          appType = 'backend-only';
+        }
+      } catch (error) {
+        console.log(`⚠️  Could not analyze package.json, using backend-only template`);
+      }
+      
+      // Use optimized Dockerfile
+      const currentDir = path.dirname(fileURLToPath(import.meta.url));
+      const templatePath = path.join(currentDir, `templates/Dockerfile.${appType}.optimized`);
+      const dockerfilePath = path.join(appPath, 'Dockerfile');
+      
+      // Detect app folders for dynamic Dockerfile generation
+      const appFolders = await this.detectAppFolders(appPath);
+      
+      // Read template and render with nunjucks
+      const templateContent = await fs.readFile(templatePath, 'utf8');
+      const dockerfile = nunjucks.renderString(templateContent, {
+        appFolders: appFolders
+      });
+      
+      // Write rendered Dockerfile to app directory
+      await fs.writeFile(dockerfilePath, dockerfile);
+      
+      // Build with versioned name and caching
+      const buildCommand = `DOCKER_BUILDKIT=1 docker build \\
+        --cache-from "${appName}:latest" \\
+        --cache-from "${appName}:deps" \\
+        --cache-from "${appName}:builder" \\
+        --target runtime \\
+        -t "${containerName}" \\
+        -t "${appName}:${version}" \\
+        -t "${appName}:latest" \\
+        "${appPath}"`;
+      
+      console.log(`🔨 Building: ${containerName}`);
+      
+      const dockerBuildStart = Date.now();
+      let dockerBuildTime;
+      
+      try {
+        execSync(buildCommand, { 
+          stdio: 'inherit',
+          timeout: 300000 // 5 minute timeout
+        });
+        dockerBuildTime = Date.now() - dockerBuildStart;
+      } catch (error) {
+        console.log(`⚠️  Optimized build failed, trying fallback without cache...`);
+        
+        // Fallback: build without cache
+        const fallbackCommand = `docker build -t "${containerName}" -t "${appName}:${version}" -t "${appName}:latest" "${appPath}"`;
+        
+        const fallbackStart = Date.now();
+        execSync(fallbackCommand, { 
+          stdio: 'inherit',
+          timeout: 300000
+        });
+        dockerBuildTime = Date.now() - fallbackStart;
+        
+        console.log(`⚠️  Fallback build succeeded`);
+      }
+      
+      console.log(`⚡ Build completed in ${dockerBuildTime}ms`);
+      
+      return {
+        success: true,
+        buildMetrics: {
+          totalBuildTime: Date.now() - buildStartTime,
+          dockerBuildTime,
+          optimized: true
+        }
+      };
+      
+    } catch (error) {
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  async deployWithBlueGreen(appName, newVersion, newContainerName, port) {
+    try {
+      // 1. Check if port is already in use and stop any existing containers
+      console.log(`🔍 Checking port ${port} availability...`);
+      try {
+        const portCheck = execSync(`lsof -i :${port}`, { encoding: 'utf8' });
+        if (portCheck.trim()) {
+          console.log(`⚠️  Port ${port} is in use. Stopping existing containers...`);
+          // Stop any containers using this port
+          execSync(`docker ps --filter "publish=${port}" --format "{{.Names}}" | xargs -r docker stop`, { stdio: 'ignore' });
+          execSync(`docker ps -a --filter "publish=${port}" --format "{{.Names}}" | xargs -r docker rm`, { stdio: 'ignore' });
+        }
+      } catch (error) {
+        // Port is free, continue
+      }
+      
+      // 2. Start new container on temporary port for testing
+      const tempPort = port + 1000; // Use port + 1000 for testing
+      
+      console.log(`🚀 Starting new container on port ${tempPort} for testing...`);
+      execSync(`docker run -d --name "${newContainerName}" -p ${tempPort}:3000 "${newContainerName}"`, { stdio: 'inherit' });
+      
+      // 3. Health check the new container
+      console.log(`🏥 Running health checks...`);
+      const healthOk = await this.healthCheckContainer(newContainerName, tempPort);
+      
+      if (!healthOk) {
+        throw new Error('Health check failed');
+      }
+      
+      // 4. Stop old container
+      const app = this.findApp(appName);
+      const currentVersion = this.getCurrentVersion(appName);
+      
+      if (currentVersion && currentVersion.containerName) {
+        console.log(`🛑 Stopping old container: ${currentVersion.containerName}`);
+        try {
+          execSync(`docker stop "${currentVersion.containerName}"`, { stdio: 'ignore' });
+          execSync(`docker rm "${currentVersion.containerName}"`, { stdio: 'ignore' });
+        } catch (error) {
+          console.log(`⚠️  Could not stop old container: ${error.message}`);
+        }
+      }
+      
+      // 5. Switch new container to production port
+      console.log(`🔄 Switching to production port ${port}...`);
+      execSync(`docker stop "${newContainerName}"`, { stdio: 'ignore' });
+      execSync(`docker rm "${newContainerName}"`, { stdio: 'ignore' });
+      execSync(`docker run -d --name "${newContainerName}" -p ${port}:3000 "${newContainerName}"`, { stdio: 'inherit' });
+      
+      // 6. Final health check
+      const finalHealthOk = await this.healthCheckContainer(newContainerName, port);
+      
+      if (!finalHealthOk) {
+        throw new Error('Final health check failed');
+      }
+      
+      console.log(`✅ Blue-green deployment successful`);
+      return { success: true };
+      
+    } catch (error) {
+      // Cleanup failed container
+      try {
+        execSync(`docker stop "${newContainerName}"`, { stdio: 'ignore' });
+        execSync(`docker rm "${newContainerName}"`, { stdio: 'ignore' });
+      } catch {}
+      
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  async healthCheckContainer(containerName, port) {
+    // Simple health check - verify container is running and responding
+    try {
+      // Check if container is running
+      const runningContainers = execSync(`docker ps --filter "name=${containerName}" --format "{{.Names}}"`, { encoding: 'utf8' });
+      if (!runningContainers.includes(containerName)) {
+        console.log(`❌ Container ${containerName} is not running`);
+        return false;
+      }
+      
+      // Wait a moment for startup
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      
+      // Try to connect to the port (basic check)
+      try {
+        const { spawn } = await import('child_process');
+        const testConnection = spawn('nc', ['-z', 'localhost', port.toString()], { stdio: 'ignore' });
+        
+        return new Promise((resolve) => {
+          testConnection.on('close', (code) => {
+            if (code === 0) {
+              console.log(`✅ Health check passed for ${containerName}`);
+              resolve(true);
+            } else {
+              console.log(`❌ Health check failed for ${containerName} (port ${port} not responding)`);
+              resolve(false);
+            }
+          });
+          
+          // Timeout after 10 seconds
+          setTimeout(() => {
+            testConnection.kill();
+            console.log(`❌ Health check timeout for ${containerName}`);
+            resolve(false);
+          }, 10000);
+        });
+      } catch (error) {
+        console.log(`⚠️  Could not test port connection: ${error.message}`);
+        return true; // Assume healthy if we can't test
+      }
+      
+    } catch (error) {
+      console.log(`❌ Health check error: ${error.message}`);
+      return false;
+    }
+  }
+
+  async readCurrentFileContents(appPath, files) {
+    const fileContents = {};
+    
+    for (const file of files) {
+      try {
+        const filePath = path.join(appPath, file);
+        const content = await fs.readFile(filePath, 'utf8');
+        fileContents[file] = content;
+      } catch (error) {
+        console.log(`⚠️  Could not read ${file}: ${error.message}`);
+        fileContents[file] = null;
+      }
+    }
+    
+    return fileContents;
+  }
+
+  createImprovementContext(originalPrompt, improvementPrompt, files, fileContents) {
+    let context = `IMPROVEMENT REQUEST: ${improvementPrompt}
+
+ORIGINAL APP PROMPT: ${originalPrompt}
+
+CURRENT APP STRUCTURE:
+Files: ${files.join(', ')}
+
+CURRENT FILE CONTENTS:
+`;
+
+    // Add file contents in a structured way
+    for (const [filename, content] of Object.entries(fileContents)) {
+      if (content !== null) {
+        context += `\n<current_file path="${filename}">
+${content}
+</current_file>`;
+      }
+    }
+
+    context += `
+
+INSTRUCTIONS:
+1. Analyze the current app structure and functionality
+2. Understand what the app currently does based on the file contents
+3. Make targeted improvements based on the improvement request
+4. Only modify files that actually need changes
+5. Preserve existing functionality while adding new features
+6. Use the exact file format: <file path="filename.js">content</file>
+7. Only include files that need modifications - don't recreate unchanged files
+8. Ensure all changes are compatible with the existing codebase
+
+CRITICAL OUTPUT FORMAT:
+You must respond with the following structure:
+
+<changes>
+Brief explanation of what changes were made and why
+</changes>
+
+<file path="filename.js">
+// Updated file content here
+</file>
+
+<file path="another-file.js">
+// Another updated file content here
+</file>
+
+The <changes> section should briefly explain:
+- What functionality was added/modified
+- Which files were changed and why
+- Any important implementation details
+
+Only include files that actually need to be modified for the improvement.
+
+IMPORTANT: This is an improvement to an existing app, not a new app creation. Make surgical changes rather than recreating everything.`;
+    
+    return context;
+  }
+
+  async rollbackToVersion(appName, targetVersion) {
+    console.log(`🔄 Rolling back ${appName} to ${targetVersion}...`);
+    
+    const app = this.findApp(appName);
+    if (!app) {
+      console.log(`❌ App ${appName} not found.`);
+      return;
+    }
+    
+    const targetVersionData = app.versions.find(v => v.version === targetVersion);
+    if (!targetVersionData) {
+      console.log(`❌ Version ${targetVersion} not found. Available: ${app.versions.map(v => v.version).join(', ')}`);
+      return;
+    }
+    
+    if (targetVersionData.version === app.currentVersion) {
+      console.log(`⚠️  ${targetVersion} is already the current version`);
+      return;
+    }
+    
+    try {
+      // 1. Create backup of current state
+      const currentVersion = this.getCurrentVersion(appName);
+      console.log(`💾 Creating backup of current state...`);
+      await this.createBackup(appName, currentVersion.version);
+      
+      // 2. Restore files from target version backup
+      console.log(`📁 Restoring files from ${targetVersion}...`);
+      const restoreSuccess = await this.restoreFromBackup(appName, targetVersion);
+      
+      if (!restoreSuccess) {
+        throw new Error(`Could not restore files from backup`);
+      }
+      
+      // 3. Build container for target version
+      const containerName = `${appName}-${targetVersion.replace(/\./g, '-')}`;
+      console.log(`🐳 Building container: ${containerName}`);
+      
+      const appPath = path.join('./tmp', appName);
+      const dockerResult = await this.buildVersionedContainer(appName, targetVersion, containerName, appPath);
+      
+      if (!dockerResult.success) {
+        throw new Error(`Docker build failed: ${dockerResult.error}`);
+      }
+      
+      // 4. Deploy with blue-green strategy
+      const deployResult = await this.deployWithBlueGreen(appName, targetVersion, containerName, app.port);
+      
+      if (!deployResult.success) {
+        throw new Error(`Deployment failed: ${deployResult.error}`);
+      }
+      
+      // 5. Update database - mark target version as active
+      // Mark current version as inactive
+      if (currentVersion) {
+        currentVersion.isActive = false;
+      }
+      
+      // Mark target version as active
+      targetVersionData.isActive = true;
+      targetVersionData.dockerStatus = 'running';
+      targetVersionData.dockerError = null;
+      targetVersionData.containerName = containerName;
+      
+      // Update current version pointer
+      app.currentVersion = targetVersion;
+      
+      await db.write();
+      
+      console.log(`✅ Successfully rolled back ${appName} to ${targetVersion}!`);
+      console.log(`🌐 Running at http://localhost:${app.port}`);
+      
+    } catch (error) {
+      console.error(`❌ Rollback failed: ${error.message}`);
+      
+      // Try to restore current state
+      console.log(`🔄 Attempting to restore current state...`);
+      try {
+        const currentVersion = this.getCurrentVersion(appName);
+        await this.restoreFromBackup(appName, currentVersion.version);
+        console.log(`✅ Current state restored`);
+      } catch (restoreError) {
+        console.error(`❌ Could not restore current state: ${restoreError.message}`);
+      }
+    }
+  }
+
+  // =================== END VERSION MANAGEMENT ===================
+
+  displayBenchmarkResults(legacyResult, optimizedResult, cachedResult) {
+    console.log('\n📊 BENCHMARK RESULTS');
+    console.log('━'.repeat(80));
+    
+    const formatTime = (ms) => `${(ms / 1000).toFixed(1)}s`;
+    const calculateSpeedup = (baseline, optimized) => {
+      if (baseline === 0) return 'N/A';
+      return `${(baseline / optimized).toFixed(1)}x`;
+    };
+    
+    console.log(`
+📝 App Type: ${optimizedResult.appType || 'unknown'}
+
+🐌 Legacy Build:
+   Total Time:  ${formatTime(legacyResult.totalTime)}
+   Docker Time: ${formatTime(legacyResult.dockerBuildTime)}
+   Success:     ${legacyResult.success ? '✅' : '❌'}
+
+⚡ Optimized Build (First Run):
+   Total Time:  ${formatTime(optimizedResult.totalTime)}
+   Docker Time: ${formatTime(optimizedResult.dockerBuildTime)}
+   Success:     ${optimizedResult.success ? '✅' : '❌'}
+   Speedup:     ${calculateSpeedup(legacyResult.dockerBuildTime, optimizedResult.dockerBuildTime)}
+
+🚀 Optimized Build (With Cache):
+   Total Time:  ${formatTime(cachedResult.totalTime)}
+   Docker Time: ${formatTime(cachedResult.dockerBuildTime)}
+   Success:     ${cachedResult.success ? '✅' : '❌'}
+   Speedup:     ${calculateSpeedup(legacyResult.dockerBuildTime, cachedResult.dockerBuildTime)}
+
+💡 Performance Improvement:
+   First run: ${formatTime(legacyResult.dockerBuildTime - optimizedResult.dockerBuildTime)} faster
+   With cache: ${formatTime(legacyResult.dockerBuildTime - cachedResult.dockerBuildTime)} faster
+`);
+    
+    if (cachedResult.dockerBuildTime > 0 && legacyResult.dockerBuildTime > 0) {
+      const cacheSpeedup = legacyResult.dockerBuildTime / cachedResult.dockerBuildTime;
+      if (cacheSpeedup > 2) {
+        console.log(`🎉 Excellent! Optimized builds are ${cacheSpeedup.toFixed(1)}x faster!`);
+      } else if (cacheSpeedup > 1.5) {
+        console.log(`👍 Good improvement! Optimized builds are ${cacheSpeedup.toFixed(1)}x faster.`);
+      } else {
+        console.log(`⚠️  Modest improvement. Consider further optimizations.`);
+      }
     }
   }
 
@@ -875,7 +1989,7 @@ export default {
         
         if (scaffoldSuccess) {
           // Then enhance with LLM using analysis
-          const result = await this.enhanceWithLLM(prompt, appName, appPath, analysis);
+          const result = await this.enhanceWithLLM(prompt, appName, appPath, analysis, false);
           output = result.output;
           latency = result.latency;
           usage = result.usage;
@@ -896,7 +2010,19 @@ export default {
       }
       
       // Parse and create files
-      const createdFiles = await this.parseAndCreateFiles(appPath, output);
+      const { createdFiles, changesExplanation } = await this.parseAndCreateFiles(appPath, output);
+      
+      // Display changes and files information
+      if (changesExplanation) {
+        console.log(`\n📋 Changes Summary:`);
+        console.log(`   ${changesExplanation}`);
+      }
+      
+      console.log(`\n📁 Files Created/Modified:`);
+      createdFiles.forEach(file => {
+        console.log(`   📄 ${file}`);
+      });
+      console.log(`   Total: ${createdFiles.length} files\n`);
       
       // Post-generation fixes for common issues
       await this.applyPostGenerationFixes(appPath, analysis);
@@ -930,17 +2056,35 @@ export default {
       // Build and run Docker container (after files are created)
       const dockerResult = await this.buildAndRunDocker(appName, appPath, port);
       
-      // Save app info to database
+      // Save app info to database using new versioned schema
+      const fileHashes = await this.generateFileHashes(appPath, createdFiles);
       const appInfo = {
         name: appName,
-        prompt,
-        path: appPath,
+        currentVersion: 'v1.0.0',
         port: dockerResult.success ? port : null,
         createdAt: new Date().toISOString(),
-        files: createdFiles,
-        performance: { latency, tokens: usage },
-        dockerStatus: dockerResult.success ? 'running' : 'failed',
-        dockerError: dockerResult.error || null
+        versions: [{
+          version: 'v1.0.0',
+          prompt,
+          improvements: [],
+          containerName: appName,
+          files: createdFiles,
+          fileHashes,
+          performance: { 
+            latency, 
+            tokens: usage,
+            buildMetrics: dockerResult.buildMetrics || null
+          },
+          createdAt: new Date().toISOString(),
+          isActive: dockerResult.success,
+          dockerStatus: dockerResult.success ? 'running' : 'failed',
+          dockerError: dockerResult.error || null,
+          parentVersion: null,
+          changedFiles: [],
+          addedFiles: createdFiles,
+          removedFiles: [],
+          backupPath: null
+        }]
       };
       
       db.data.apps.push(appInfo);
@@ -983,30 +2127,68 @@ export default {
     console.log('─'.repeat(80));
     
     for (const app of db.data.apps) {
-      const status = app.dockerStatus === 'running' ? '🟢 Running' : '🔴 Stopped';
+      // Handle both old and new schema formats
+      let prompt, path, dockerStatus;
+      
+      if (app.versions) {
+        // New versioned schema
+        const currentVersion = app.versions.find(v => v.version === app.currentVersion) || app.versions[app.versions.length - 1];
+        prompt = currentVersion.prompt;
+        path = `tmp/${app.name}`;
+        dockerStatus = currentVersion.dockerStatus;
+      } else {
+        // Old flat schema
+        prompt = app.prompt;
+        path = app.path;
+        dockerStatus = app.dockerStatus;
+      }
+      
+      const status = dockerStatus === 'running' ? '🟢 Running' : '🔴 Stopped';
       const port = app.port ? `:${app.port}` : '';
       console.log(`${status} ${app.name}${port}`);
-      console.log(`   📝 ${app.prompt}`);
-      console.log(`   📁 ${app.path}`);
+      console.log(`   📝 ${prompt}`);
+      console.log(`   📁 ${path}`);
       
       // Get volume info if container is running
-      if (app.dockerStatus === 'running') {
+      if (dockerStatus === 'running') {
         try {
-          const inspectResult = execSync(`docker inspect "${app.name}" --format='{{json .Mounts}}'`, { encoding: 'utf8' });
-          const mounts = JSON.parse(inspectResult);
-          const volumes = mounts.filter(mount => mount.Type === 'volume');
+          // First check if container actually exists
+          const containerExists = execSync(`docker ps -a --filter "name=${app.name}" --format "{{.Names}}"`, { encoding: 'utf8' }).trim();
           
-          for (const volume of volumes) {
+          if (containerExists && containerExists.includes(app.name)) {
+            // Use a safer approach to get volume info
             try {
-              // Get volume size
-              const sizeResult = execSync(`docker exec "${app.name}" du -sh /app/data 2>/dev/null || echo "N/A"`, { encoding: 'utf8' });
-              const size = sizeResult.trim().split('\t')[0] || 'N/A';
-              console.log(`   💾 Volume: ${volume.Name.substring(0, 12)}... (${size})`);
-            } catch {
-              console.log(`   💾 Volume: ${volume.Name.substring(0, 12)}... (N/A)`);
+              // Get all container info and extract volumes manually
+              const fullInspect = execSync(`docker inspect "${app.name}"`, { encoding: 'utf8' });
+              const containerInfo = JSON.parse(fullInspect);
+              
+              if (containerInfo && containerInfo[0] && containerInfo[0].Mounts) {
+                const volumes = containerInfo[0].Mounts.filter(mount => mount && mount.Type === 'volume');
+                
+                for (const volume of volumes) {
+                  try {
+                    // Get volume size
+                    const sizeResult = execSync(`docker exec "${app.name}" du -sh /app/data 2>/dev/null || echo "N/A"`, { encoding: 'utf8' });
+                    const size = sizeResult.trim().split('\t')[0] || 'N/A';
+                    console.log(`   💾 Volume: ${volume.Name.substring(0, 12)}... (${size})`);
+                  } catch {
+                    console.log(`   💾 Volume: ${volume.Name.substring(0, 12)}... (N/A)`);
+                  }
+                }
+              } else {
+                console.log(`   💾 No volumes found`);
+              }
+            } catch (inspectError) {
+              // Docker inspect failed, skip volume info
+              console.log(`   💾 Volume info unavailable (container may not exist)`);
             }
+          } else {
+            console.log(`   💾 Container not found`);
           }
-        } catch {}
+        } catch (inspectError) {
+          // Docker inspect failed, skip volume info
+          console.log(`   💾 Volume info unavailable (container may not exist)`);
+        }
       }
       
       console.log(`   🕐 ${new Date(app.createdAt).toLocaleString()}`);
@@ -1050,10 +2232,28 @@ export default {
       // Get volume names before removing container
       let volumeNames = [];
       try {
-        const inspectResult = execSync(`docker inspect "${appName}" --format='{{json .Mounts}}'`, { encoding: 'utf8' });
-        const mounts = JSON.parse(inspectResult);
-        volumeNames = mounts.filter(mount => mount.Type === 'volume').map(mount => mount.Name);
-      } catch {}
+        // First check if container actually exists
+        const containerExists = execSync(`docker ps -a --filter "name=${appName}" --format "{{.Names}}"`, { encoding: 'utf8' }).trim();
+        
+        if (containerExists && containerExists.includes(appName)) {
+          // Use a safer approach to get volume info
+          try {
+            // Get all container info and extract volumes manually
+            const fullInspect = execSync(`docker inspect "${appName}"`, { encoding: 'utf8' });
+            const containerInfo = JSON.parse(fullInspect);
+            
+            if (containerInfo && containerInfo[0] && containerInfo[0].Mounts) {
+              volumeNames = containerInfo[0].Mounts.filter(mount => mount && mount.Type === 'volume').map(mount => mount.Name);
+            }
+          } catch (inspectError) {
+            // Docker inspect failed, skip volume cleanup
+            console.log(`⚠️  Could not inspect container for volume cleanup`);
+          }
+        }
+      } catch (inspectError) {
+        // Docker inspect failed, skip volume cleanup
+        console.log(`⚠️  Could not inspect container for volume cleanup`);
+      }
 
       // Stop and remove container
       execSync(`docker stop "${appName}"`, { stdio: 'ignore' });
@@ -1097,8 +2297,21 @@ const argv = await yargs(hideBin(process.argv))
     }
   }, async (argv) => {
     if (argv.prompt) {
-      await generator.createApp(argv.prompt);
-    } else if (!argv.list && !argv.stop && !argv.remove) {
+      // Set Docker optimization mode based on flags
+      if (argv['legacy-build']) {
+        process.env.DOCKER_OPTIMIZED = 'false';
+        console.log('🐌 Legacy build mode enabled');
+      } else {
+        process.env.DOCKER_OPTIMIZED = 'true';
+        console.log('⚡ Optimized build mode enabled');
+      }
+      
+      if (argv.benchmark) {
+        await generator.benchmarkBuilds(argv.prompt);
+      } else {
+        await generator.createApp(argv.prompt);
+      }
+    } else if (!argv.list && !argv.stop && !argv.remove && !argv.benchmark) {
       console.log('❌ Please provide a prompt or use --help for options');
     }
   })
@@ -1117,6 +2330,40 @@ const argv = await yargs(hideBin(process.argv))
     describe: 'Remove an app completely',
     type: 'string'
   })
+  .option('legacy-build', {
+    describe: 'Use legacy Docker build (disable optimizations)',
+    type: 'boolean',
+    default: false
+  })
+  .option('benchmark', {
+    describe: 'Run both optimized and legacy builds for comparison',
+    type: 'boolean',
+    default: false
+  })
+  .option('improve', {
+    describe: 'Improve an existing app',
+    type: 'string'
+  })
+  .option('app', {
+    describe: 'Target app name (used with --improve, --versions, --rollback, --diff)',
+    type: 'string'
+  })
+  .option('versions', {
+    describe: 'List versions of the specified app (use with --app)',
+    type: 'boolean'
+  })
+  .option('rollback', {
+    describe: 'Rollback to a specific version',
+    type: 'string'
+  })
+  .option('diff', {
+    describe: 'Show diff between two versions: --diff "from-version to-version"',
+    type: 'string'
+  })
+  .option('clear-cache', {
+    describe: 'Clear Docker build cache (use when builds hang)',
+    type: 'boolean'
+  })
   .help()
   .parse();
 
@@ -1127,4 +2374,50 @@ if (argv.list) {
   await generator.stopApp(argv.stop);
 } else if (argv.remove) {
   await generator.removeApp(argv.remove);
+} else if (argv.improve) {
+  if (!argv.app) {
+    console.log('❌ Usage: --improve "improvement description" --app "app-name"');
+    console.log('   Example: --improve "Add user authentication" --app "todo-app"');
+  } else {
+    await generator.improveApp(argv.app, argv.improve);
+  }
+} else if (argv.versions) {
+  if (!argv.app) {
+    console.log('❌ Usage: --versions --app "app-name"');
+    console.log('   Example: --versions --app "todo-app"');
+  } else {
+    await generator.listVersions(argv.app);
+  }
+} else if (argv.rollback) {
+  if (!argv.app) {
+    console.log('❌ Usage: --rollback "version" --app "app-name"');
+    console.log('   Example: --rollback "v1.0.0" --app "todo-app"');
+  } else {
+    await generator.rollbackToVersion(argv.app, argv.rollback);
+  }
+} else if (argv.diff) {
+  if (!argv.app) {
+    console.log('❌ Usage: --diff "from-version to-version" --app "app-name"');
+    console.log('   Example: --diff "v1.0.0 v1.1.0" --app "todo-app"');
+  } else {
+    // Parse diff command: "from-version to-version"
+    const parts = argv.diff.split(' ');
+    if (parts.length !== 2) {
+      console.log('❌ Usage: --diff "from-version to-version" --app "app-name"');
+      console.log('   Example: --diff "v1.0.0 v1.1.0" --app "todo-app"');
+    } else {
+      const [fromVersion, toVersion] = parts;
+      await generator.showDiff(argv.app, fromVersion, toVersion);
+    }
+  }
+} else if (argv['clear-cache']) {
+  console.log('🧹 Clearing Docker build cache...');
+  try {
+    execSync('docker system prune -af --volumes', { stdio: 'inherit' });
+    execSync('docker builder prune -af', { stdio: 'inherit' });
+    console.log('✅ Docker cache cleared successfully!');
+    console.log('ℹ️  Next builds will be slower but should not hang');
+  } catch (error) {
+    console.error('❌ Failed to clear cache:', error.message);
+  }
 }

@@ -1,0 +1,48 @@
+# Multi-stage optimized Dockerfile for fullstack apps
+# Stage 1: Dependencies (cached layer - only rebuilds when package.json changes)
+FROM node:18-alpine AS deps
+WORKDIR /app
+RUN apk add --no-cache sqlite
+COPY package*.json ./
+RUN npm install --only=production && npm cache clean --force
+
+# Stage 2: Development dependencies and build
+FROM node:18-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm install
+COPY index.html vite.config.js postcss.config.js ./
+{% if appFolders %}
+{% for folder in appFolders %}
+COPY {{ folder }}/ ./{{ folder }}/
+{% endfor %}
+{% endif %}
+RUN npm run build
+
+# Stage 3: Runtime (minimal final image)
+FROM node:18-alpine AS runtime
+RUN apk add --no-cache sqlite
+WORKDIR /app
+
+# Create data directory for persistent storage
+RUN mkdir -p /app/data
+
+# Copy production dependencies
+COPY --from=deps /app/node_modules ./node_modules
+
+# Copy built frontend
+COPY --from=builder /app/dist ./dist
+
+# Copy backend files (only what's needed)
+COPY server.js package.json ./
+{% if appFolders %}
+{% for folder in appFolders %}
+COPY {{ folder }}/ ./{{ folder }}/
+{% endfor %}
+{% endif %}
+
+# Create volume for database persistence
+VOLUME ["/app/data"]
+
+EXPOSE 3000
+CMD ["node", "server.js"]

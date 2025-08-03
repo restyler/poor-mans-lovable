@@ -2,7 +2,7 @@ export const analysisPrompt = (prompt) => `Analyze this app request and determin
 
 REQUEST: "${prompt}"
 
-Please respond with ONLY a JSON object containing:
+IMPORTANT: Respond with ONLY raw JSON - NO markdown, NO code blocks, NO explanations. Just the JSON object:
 {
   "appType": "frontend|backend|fullstack",
   "framework": "react|vue|svelte|express|fastify|koa|vanilla",

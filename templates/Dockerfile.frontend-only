@@ -4,7 +4,11 @@ WORKDIR /app
 
 COPY package.json ./
 RUN npm install
-COPY . .
+{% if appFolders %}
+{% for folder in appFolders %}
+COPY {{ folder }}/ ./{{ folder }}/
+{% endfor %}
+{% endif %}
 
 # Build the app (with esbuild fix)
 RUN npm install esbuild@latest && npm run build

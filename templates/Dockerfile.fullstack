@@ -10,7 +10,11 @@ RUN mkdir -p /app/data
 
 COPY package.json ./
 RUN npm install
-COPY . .
+{% if appFolders %}
+{% for folder in appFolders %}
+COPY {{ folder }}/ ./{{ folder }}/
+{% endfor %}
+{% endif %}
 
 # Build frontend (with esbuild fix)
 RUN npm install esbuild@latest && npm run build
