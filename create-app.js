@@ -2688,7 +2688,7 @@ const argv = await yargs(hideBin(process.argv))
       } else {
         await generator.createApp(argv.prompt);
       }
-    } else if (!argv.list && !argv.stop && !argv.remove && !argv.benchmark) {
+    } else if (!argv.list && !argv.stop && !argv.remove && !argv.benchmark && !argv.improve && !argv.retry && !argv.versions && !argv.rollback && !argv.diff && !argv['clear-cache']) {
       console.log('❌ Please provide a prompt or use --help for options');
     }
   })
