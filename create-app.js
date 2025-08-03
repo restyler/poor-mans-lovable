@@ -2051,6 +2051,18 @@ IMPORTANT:
         .catch(error => {
           clearTimeout(timeoutId);
           console.log(`❌ Health check failed for ${containerName}: ${error.message}`);
+          
+          // Show container logs for debugging
+          try {
+            const logs = execSync(`docker logs "${containerName}" 2>&1`, { encoding: 'utf8' });
+            if (logs.trim()) {
+              console.log(`📋 Container logs (last 500 chars):`);
+              console.log(logs.slice(-500));
+            }
+          } catch (logError) {
+            console.log(`⚠️  Could not retrieve container logs: ${logError.message}`);
+          }
+          
           resolve(false);
         });
       });
