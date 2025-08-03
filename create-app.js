@@ -118,36 +118,19 @@ class CerebrasAppGenerator {
   }
 
   fallbackAppAnalysis(prompt) {
-    // Fallback to simple keyword detection if LLM analysis fails
-    const frontendKeywords = ['react', 'vue', 'svelte', 'frontend', 'spa', 'vite', 'component', 'ui', 'interface'];
-    const backendKeywords = ['api', 'rest', 'server', 'backend', 'express', 'database', 'auth', 'sqlite', 'postgres'];
-    const fullstackKeywords = ['full-stack', 'fullstack', 'full stack', 'frontend and backend', 'track', 'store', 'save'];
-    
+    // Simple fallback for uniform fullstack architecture
     const promptLower = prompt.toLowerCase();
-    const frontendScore = frontendKeywords.filter(keyword => promptLower.includes(keyword)).length;
-    const backendScore = backendKeywords.filter(keyword => promptLower.includes(keyword)).length;
-    const fullstackScore = fullstackKeywords.filter(keyword => promptLower.includes(keyword)).length;
-    
-    // Enhanced full-stack detection
-    const hasBothFrontendAndBackend = (frontendScore > 0 && backendScore > 0) || 
-                                    (promptLower.includes('track') && promptLower.includes('ui')) ||
-                                    (promptLower.includes('spa') && promptLower.includes('api'));
-    
-    // All apps use uniform fullstack architecture
-    const appType = 'fullstack';
     
     return {
-      appType,
+      appType: 'fullstack',
       framework: promptLower.includes('react') ? 'react' : 'vanilla',
-      buildTool: promptLower.includes('vite') ? 'vite' : 'none',
+      buildTool: 'vite',
       styling: promptLower.includes('tailwind') ? 'tailwind' : 'css',
-      database: promptLower.includes('sqlite') ? 'sqlite' : 'none',
+      database: 'sqlite',
       authentication: promptLower.includes('auth') || promptLower.includes('login') ? 'true' : 'false',
       serverFile: 'server.js',
       staticBuild: 'true',
-      deployment: 'docker',
-      missingFiles: [],
-      recommendations: []
+      deployment: 'docker'
     };
   }
 
@@ -1120,7 +1103,10 @@ export default {
       /curl.*http/,
       /wget/,
       /eval\s*\(/,
-      /new Function\s*\(/
+      /new Function\s*\(/,
+      /<\/\w+>/,  // XML-like closing tags that break JSON
+      /<current_file>/,  // LLM artifacts
+      /<\/current_file>/
     ];
     
     for (const pattern of dangerousPatterns) {

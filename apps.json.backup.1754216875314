@@ -1,0 +1,216 @@
+{
+  "apps": [
+    {
+      "name": "todo-app",
+      "prompt": "Create a todo app",
+      "path": "tmp/todo-app",
+      "port": 3138,
+      "createdAt": "2025-08-02T20:22:08.786Z",
+      "files": [
+        "package.json",
+        "postcss.config.js",
+        "vite.config.js",
+        "server.js",
+        "index.html",
+        "src/main.jsx",
+        "src/App.jsx",
+        "src/index.css"
+      ],
+      "performance": {
+        "latency": 1800,
+        "tokens": {
+          "prompt_tokens": 1007,
+          "completion_tokens": 2563,
+          "total_tokens": 3570,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "dockerStatus": "running",
+      "dockerError": null
+    },
+    {
+      "name": "fullstack-blog-react",
+      "prompt": "Build a full-stack blog with React frontend and Express backend",
+      "path": "tmp/fullstack-blog-react",
+      "port": 3139,
+      "createdAt": "2025-08-02T20:36:28.892Z",
+      "files": [
+        "package.json",
+        "postcss.config.js",
+        "vite.config.js",
+        "index.html",
+        "src/index.css",
+        "src/main.jsx",
+        "src/App.jsx",
+        "server.js",
+        "README.md"
+      ],
+      "performance": {
+        "latency": 2248,
+        "tokens": {
+          "prompt_tokens": 1014,
+          "completion_tokens": 3589,
+          "total_tokens": 4603,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "dockerStatus": "running",
+      "dockerError": null
+    },
+    {
+      "name": "2nd-fullstack-blog",
+      "prompt": "Build a 2nd full-stack blog with React frontend and Express backend",
+      "path": "tmp/2nd-fullstack-blog",
+      "port": 3140,
+      "createdAt": "2025-08-03T05:26:51.519Z",
+      "files": [
+        "package.json",
+        "postcss.config.js",
+        "vite.config.js",
+        "index.html",
+        "src/index.css",
+        "src/main.jsx",
+        "src/App.jsx",
+        "server.js",
+        "data/.gitkeep"
+      ],
+      "performance": {
+        "latency": 1961,
+        "tokens": {
+          "prompt_tokens": 1017,
+          "completion_tokens": 2992,
+          "total_tokens": 4009,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "dockerStatus": "running",
+      "dockerError": null
+    },
+    {
+      "name": "landing-page-for",
+      "prompt": "Create a landing page for a tech startup",
+      "path": "tmp/landing-page-for",
+      "port": 3141,
+      "createdAt": "2025-08-03T05:31:43.248Z",
+      "files": [
+        "index.html",
+        "package.json",
+        "postcss.config.js",
+        "src/index.css",
+        "src/main.jsx",
+        "src/App.jsx",
+        "vite.config.js"
+      ],
+      "performance": {
+        "latency": 5718,
+        "tokens": {
+          "prompt_tokens": 1536,
+          "completion_tokens": 6500,
+          "total_tokens": 8036,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "dockerStatus": "running",
+      "dockerError": null
+    },
+    {
+      "name": "portfolio-website",
+      "prompt": "Create a portfolio website",
+      "path": "tmp/portfolio-website",
+      "port": 3142,
+      "createdAt": "2025-08-03T05:32:44.600Z",
+      "files": [
+        "index.html",
+        "package.json",
+        "postcss.config.js",
+        "src/index.css",
+        "src/main.jsx",
+        "src/App.jsx",
+        "vite.config.js"
+      ],
+      "performance": {
+        "latency": 6275,
+        "tokens": {
+          "prompt_tokens": 1661,
+          "completion_tokens": 5848,
+          "total_tokens": 7509,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "dockerStatus": "running",
+      "dockerError": null
+    },
+    {
+      "name": "chat-application",
+      "prompt": "Create a chat application",
+      "path": "tmp/chat-application",
+      "port": 3143,
+      "createdAt": "2025-08-03T06:03:35.858Z",
+      "files": [
+        "package.json",
+        "postcss.config.js",
+        "vite.config.js",
+        "server.js",
+        "index.html",
+        "src/index.css",
+        "src/main.jsx",
+        "src/App.jsx"
+      ],
+      "performance": {
+        "latency": 3847,
+        "tokens": {
+          "prompt_tokens": 27874,
+          "completion_tokens": 3516,
+          "total_tokens": 31390,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      },
+      "dockerStatus": "running",
+      "dockerError": null
+    },
+    {
+      "name": "simple-todo-app",
+      "prompt": "Create a simple todo app test",
+      "path": "tmp/simple-todo-app",
+      "port": null,
+      "createdAt": "2025-08-03T10:17:06.027Z",
+      "files": [
+        "package.json",
+        "vite.config.js",
+        "postcss.config.js",
+        "src/index.css",
+        "src/main.jsx",
+        "src/App.jsx",
+        "server.js",
+        "index.html"
+      ],
+      "performance": {
+        "latency": 1894,
+        "tokens": {
+          "prompt_tokens": 1009,
+          "completion_tokens": 2475,
+          "total_tokens": 3484,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        },
+        "buildMetrics": null
+      },
+      "dockerStatus": "failed",
+      "dockerError": "Command failed: docker run -d --name \"simple-todo-app-1754216222836\" -p 3145:3000 \"simple-todo-app-1754216222836\""
+    }
+  ],
+  "nextPort": 3146
+}
