@@ -1868,18 +1868,18 @@ IMPORTANT:
 
   async deployWithBlueGreen(appName, newVersion, newContainerName, port) {
     try {
-      // 1. Check if port is already in use and stop any existing containers
-      console.log(`🔍 Checking port ${port} availability...`);
+      // 1. Identify existing containers on production port (don't stop them yet)
+      console.log(`🔍 Checking port ${port} for running containers...`);
+      let existingContainers = [];
       try {
         const portCheck = execSync(`lsof -i :${port}`, { encoding: 'utf8' });
         if (portCheck.trim()) {
-          console.log(`⚠️  Port ${port} is in use. Stopping existing containers...`);
-          // Stop any containers using this port
-          execSync(`docker ps --filter "publish=${port}" --format "{{.Names}}" | xargs -r docker stop`, { stdio: 'ignore' });
-          execSync(`docker ps -a --filter "publish=${port}" --format "{{.Names}}" | xargs -r docker rm`, { stdio: 'ignore' });
+          console.log(`📋 Port ${port} in use - will switch after health checks pass`);
+          existingContainers = execSync(`docker ps --filter "publish=${port}" --format "{{.Names}}"`, { encoding: 'utf8' })
+            .trim().split('\n').filter(name => name.trim());
         }
       } catch (error) {
-        // Port is free, continue
+        console.log(`✅ Port ${port} is free`);
       }
       
       // 2. Start new container on temporary port for testing
@@ -1896,24 +1896,27 @@ IMPORTANT:
         throw new Error('Health check failed');
       }
       
-      // 4. Stop old container
-      const app = this.findApp(appName);
-      const currentVersion = this.getCurrentVersion(appName);
+      // 4. Switch new container to production port (zero-downtime)
+      console.log(`🔄 Switching to production port ${port}...`);
       
-      if (currentVersion && currentVersion.containerName) {
-        console.log(`🛑 Stopping old container: ${currentVersion.containerName}`);
-        try {
-          execSync(`docker stop "${currentVersion.containerName}"`, { stdio: 'ignore' });
-          execSync(`docker rm "${currentVersion.containerName}"`, { stdio: 'ignore' });
-        } catch (error) {
-          console.log(`⚠️  Could not stop old container: ${error.message}`);
+      // Stop and remove the temp container first
+      execSync(`docker stop "${newContainerName}"`, { stdio: 'ignore' });
+      execSync(`docker rm "${newContainerName}"`, { stdio: 'ignore' });
+      
+      // Now stop old containers and immediately start new one (minimal gap)
+      if (existingContainers.length > 0) {
+        console.log(`🛑 Stopping old containers: ${existingContainers.join(', ')}`);
+        for (const container of existingContainers) {
+          try {
+            execSync(`docker stop "${container}"`, { stdio: 'ignore' });
+            execSync(`docker rm "${container}"`, { stdio: 'ignore' });
+          } catch (error) {
+            console.log(`⚠️  Could not stop old container ${container}: ${error.message}`);
+          }
         }
       }
       
-      // 5. Switch new container to production port
-      console.log(`🔄 Switching to production port ${port}...`);
-      execSync(`docker stop "${newContainerName}"`, { stdio: 'ignore' });
-      execSync(`docker rm "${newContainerName}"`, { stdio: 'ignore' });
+      // Start new container on production port immediately
       execSync(`docker run -d --name "${newContainerName}" -p ${port}:3000 "${newContainerName}"`, { stdio: 'inherit' });
       
       // 6. Final health check on production port
