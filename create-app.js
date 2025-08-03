@@ -107,7 +107,7 @@ class CerebrasAppGenerator {
       const content = this.cleanJsonContent(data.choices[0].message.content);
       const analysis = JSON.parse(content);
       
-      console.log(`📊 Analysis: ${analysis.appType} app with ${analysis.framework} + ${analysis.buildTool}`);
+      console.log(`📊 Analysis: fullstack app with ${analysis.framework} + ${analysis.buildTool}`);
       console.log(`🎨 Styling: ${analysis.styling}, 🗄️ DB: ${analysis.database}, 🔐 Auth: ${analysis.authentication}`);
       
       return analysis;
@@ -133,8 +133,8 @@ class CerebrasAppGenerator {
                                     (promptLower.includes('track') && promptLower.includes('ui')) ||
                                     (promptLower.includes('spa') && promptLower.includes('api'));
     
-    const appType = hasBothFrontendAndBackend || fullstackScore > 0 ? 'fullstack' : 
-                   (frontendScore > backendScore ? 'frontend' : 'backend');
+    // All apps use uniform fullstack architecture
+    const appType = 'fullstack';
     
     return {
       appType,
@@ -143,8 +143,8 @@ class CerebrasAppGenerator {
       styling: promptLower.includes('tailwind') ? 'tailwind' : 'css',
       database: promptLower.includes('sqlite') ? 'sqlite' : 'none',
       authentication: promptLower.includes('auth') || promptLower.includes('login') ? 'true' : 'false',
-      serverFile: appType === 'fullstack' || appType === 'backend' ? 'server.js' : 'none',
-      staticBuild: appType === 'fullstack' ? 'true' : 'false',
+      serverFile: 'server.js',
+      staticBuild: 'true',
       deployment: 'docker',
       missingFiles: [],
       recommendations: []
@@ -721,20 +721,21 @@ button:focus-visible {
         console.log(`🔧 Fixed: Added React dependencies to package.json`);
       }
 
-      // Fix 3: Ensure Express is present for backend/fullstack apps
-      if ((analysis.appType === 'backend' || analysis.appType === 'fullstack') && !packageJson.dependencies?.express) {
-        if (!packageJson.dependencies) packageJson.dependencies = {};
-        packageJson.dependencies.express = '^4.18.2';
-        modified = true;
-        console.log(`🔧 Fixed: Added Express dependency to package.json`);
-      }
-
-      // Fix 4: Ensure SQLite is present for database apps
-      if (analysis.database === 'sqlite' && !packageJson.dependencies?.sqlite3) {
-        if (!packageJson.dependencies) packageJson.dependencies = {};
-        packageJson.dependencies.sqlite3 = '^5.1.7';
-        modified = true;
-        console.log(`🔧 Fixed: Added SQLite dependency to package.json`);
+      // Fix 3: Ensure all fullstack dependencies are present
+      if (!packageJson.dependencies) packageJson.dependencies = {};
+      
+      const requiredDeps = {
+        'express': '^4.18.2',
+        'sqlite3': '^5.1.7',
+        'sqlite': '^5.1.1'
+      };
+      
+      for (const [dep, version] of Object.entries(requiredDeps)) {
+        if (!packageJson.dependencies[dep]) {
+          packageJson.dependencies[dep] = version;
+          modified = true;
+          console.log(`🔧 Fixed: Added ${dep} dependency to package.json`);
+        }
       }
 
       // Fix 5: Ensure Tailwind CSS v4 PostCSS plugin is present
@@ -903,63 +904,22 @@ export default {
         // Create or regenerate Dockerfile
         const dockerfilePath = path.join(appPath, 'Dockerfile');
         
-        // Enhanced app type detection
-        const packageJsonPath = path.join(appPath, 'package.json');
-        let appType = 'backend-only';
-        
-        try {
-          const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
-          const hasVite = packageJson.devDependencies?.vite || packageJson.dependencies?.vite;
-          const hasExpress = packageJson.dependencies?.express;
-          const hasServerFile = await fs.access(path.join(appPath, 'server.js')).then(() => true).catch(() => false);
-          
-          if (hasVite && hasExpress && hasServerFile) {
-            appType = 'fullstack';
-            console.log(`🔍 Detected full-stack app: Vite frontend + Express backend`);
-          } else if (hasVite) {
-            appType = 'frontend-only';
-            console.log(`🔍 Detected frontend-only app: Vite build`);
-          } else if (hasExpress || hasServerFile) {
-            appType = 'backend-only';
-            console.log(`🔍 Detected backend-only app: Express server`);
-          }
-        } catch (error) {
-          console.log(`⚠️  Could not analyze package.json, using backend-only template: ${error.message}`);
-        }
+        // All apps use uniform fullstack architecture
+        const appType = 'fullstack';
+        console.log(`🔍 Using standard fullstack architecture: React + Node.js + SQLite`);
         
         // Smart build strategy: Use optimized Dockerfiles
         const currentDir = path.dirname(fileURLToPath(import.meta.url));
         const useOptimized = process.env.DOCKER_OPTIMIZED !== 'false'; // Default to optimized
         
+        // Always use fullstack template
         let templatePath;
         if (useOptimized) {
-          console.log(`⚡ Using optimized Docker build strategy`);
-          switch (appType) {
-            case 'fullstack':
-              templatePath = path.join(currentDir, 'templates/Dockerfile.fullstack.optimized');
-              break;
-            case 'frontend-only':
-              templatePath = path.join(currentDir, 'templates/Dockerfile.frontend-only.optimized');
-              break;
-            case 'backend-only':
-            default:
-              templatePath = path.join(currentDir, 'templates/Dockerfile.backend-only.optimized');
-              break;
-          }
+          console.log(`⚡ Using optimized fullstack Docker build`);
+          templatePath = path.join(currentDir, 'templates/Dockerfile.fullstack.optimized');
         } else {
-          console.log(`🐌 Using legacy Docker build strategy`);
-          switch (appType) {
-            case 'fullstack':
-              templatePath = path.join(currentDir, 'templates/Dockerfile.fullstack');
-              break;
-            case 'frontend-only':
-              templatePath = path.join(currentDir, 'templates/Dockerfile.frontend-only');
-              break;
-            case 'backend-only':
-            default:
-              templatePath = path.join(currentDir, 'templates/Dockerfile.backend-only');
-              break;
-          }
+          console.log(`🐌 Using legacy fullstack Docker build`);
+          templatePath = path.join(currentDir, 'templates/Dockerfile.fullstack');
         }
         
         // Detect app folders for dynamic Dockerfile generation
@@ -1400,7 +1360,7 @@ IMPORTANT:
       const analysis = await this.analyzeAppStructure(prompt);
       
       let result;
-      if (analysis.appType === 'frontend' && analysis.buildTool === 'vite') {
+      if (analysis.buildTool === 'vite') {
         const scaffoldSuccess = await this.scaffoldWithVite(appName, appPath);
         if (scaffoldSuccess) {
           result = await this.enhanceWithLLM(prompt, appName, appPath, analysis, false);
@@ -1437,7 +1397,7 @@ IMPORTANT:
         dockerBuildTime: dockerResult.buildMetrics?.dockerBuildTime || 0,
         success: dockerResult.success,
         optimized: dockerResult.buildMetrics?.optimized || false,
-        appType: analysis.appType
+        appType: 'fullstack'
       };
       
     } catch (error) {
@@ -1843,26 +1803,8 @@ IMPORTANT:
     const buildStartTime = Date.now();
     
     try {
-      // Detect app type for appropriate Dockerfile
-      const packageJsonPath = path.join(appPath, 'package.json');
-      let appType = 'backend-only';
-      
-      try {
-        const packageJson = JSON.parse(await fs.readFile(packageJsonPath, 'utf8'));
-        const hasVite = packageJson.devDependencies?.vite || packageJson.dependencies?.vite;
-        const hasExpress = packageJson.dependencies?.express;
-        const hasServerFile = await fs.access(path.join(appPath, 'server.js')).then(() => true).catch(() => false);
-        
-        if (hasVite && hasExpress && hasServerFile) {
-          appType = 'fullstack';
-        } else if (hasVite) {
-          appType = 'frontend-only';
-        } else if (hasExpress || hasServerFile) {
-          appType = 'backend-only';
-        }
-      } catch (error) {
-        console.log(`⚠️  Could not analyze package.json, using backend-only template`);
-      }
+      // All apps use uniform fullstack architecture
+      const appType = 'fullstack';
       
       // Use optimized Dockerfile
       const currentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -2056,8 +1998,8 @@ IMPORTANT:
           try {
             const logs = execSync(`docker logs "${containerName}" 2>&1`, { encoding: 'utf8' });
             if (logs.trim()) {
-              console.log(`📋 Container logs (last 500 chars):`);
-              console.log(logs.slice(-500));
+              console.log(`📋 Container logs (last 1000 chars):`);
+              console.log(logs.slice(-1000));
             }
           } catch (logError) {
             console.log(`⚠️  Could not retrieve container logs: ${logError.message}`);
@@ -2302,12 +2244,12 @@ IMPORTANT: This is an improvement to an existing app, not a new app creation. Ma
     try {
       // Analyze app structure intelligently
       const analysis = await this.analyzeAppStructure(prompt);
-      const appType = analysis.appType;
+      const appType = 'fullstack';
       
       let output, latency, usage;
       
       // Use intelligent approach based on analysis
-      if (appType === 'frontend' && analysis.buildTool === 'vite') {
+      if (analysis.buildTool === 'vite') {
         console.log(`🔄 Using hybrid approach: Vite scaffolding + LLM enhancement`);
         
         // Scaffold with Vite first
